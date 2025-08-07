@@ -1,0 +1,70 @@
+// To get started, press Ctrl+Space to bring up the completion menu and view the available nodes.
+
+// You can also use the buttons in the sidebar to perform actions on nodes.
+// Actions currently available include:
+
+// * Enabling / disabling the node
+// * Adding the bus to a bus
+// * Removing the node
+// * Connecting ADC channels
+
+// For more help, browse the DeviceTree documentation at https: //docs.zephyrproject.org/latest/guides/dts/index.html
+// You can also visit the nRF DeviceTree extension documentation at https: //docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
+
+
+
+&spi1 {
+    status = "disabled";
+};
+
+/ {
+    zephyr,user {
+        io-channels = <&adc 4>, <&adc 5>;
+        io-channel-names = "VBAT", "SLIDER";
+    };
+
+    buttons {
+        compatible = "gpio-keys";
+        button4: button_4 {
+            gpios = <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Push button switch 4";
+        };
+        button5: button_5 {
+            gpios = <&gpio0 23 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Push button switch 5";
+        };
+    };
+
+    aliases {
+        pw-sw = &button4;
+        blt-sw = &button5;
+    };
+
+};
+
+
+
+&adc {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    status = "okay";
+    channel@4 {
+        reg = <4>;
+        zephyr,gain = "ADC_GAIN_1_6";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,input-positive = <NRF_SAADC_AIN4>; /* P0.28 for nRF52xx */
+        zephyr,resolution = <12>;
+    };
+    channel@5 {
+        reg = <5>;
+        zephyr,gain = "ADC_GAIN_1_6";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,input-positive = <NRF_SAADC_AIN5>; /* P0.29 for nRF52xx */
+        zephyr,resolution = <12>;
+    };
+};
+&spi2 {
+    status = "disabled";
+};
