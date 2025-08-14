@@ -1,276 +1,234 @@
 /*
- * Copyright (c) 2016 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- * Note:
- * Tested on nRF Connect SDK Version : 2.0
+ * DRY button handling: one generic context, two instances (PW and BLT)
+ * Active level is taken from Devicetree (use GPIO_ACTIVE_LOW in DT if needed).
+ * Short press: custom per-button action
+ * Long press:  custom per-button action (2s default)
  */
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/util.h> /* CONTAINER_OF */
 
-/* Sleep time - 10 minutes */
-#define SLEEP_TIME_MS 10 * 60 * 1000
+/* --- Timings --- */
+#define SLEEP_TIME_MS (10 * 60 * 1000) /* 10 minutes */
+#define LONG_PRESS_TIME_MS 2000        /* 2 seconds */
+#define DEBOUNCE_TIME_MS 50            /* 50 ms */
 
-/* Long press threshold - 2 seconds */
-#define LONG_PRESS_TIME_MS 2000
-
-/* Debounce time - 50ms */
-#define DEBOUNCE_TIME_MS 50
-
-/* Button definitions */
+/* --- Pins from aliases --- */
 #define PW_SW_NODE DT_ALIAS(pw_sw)
 #define BLT_SW_NODE DT_ALIAS(blt_sw)
-
-static const struct gpio_dt_spec pw_button = GPIO_DT_SPEC_GET(PW_SW_NODE, gpios);
-static const struct gpio_dt_spec blt_button = GPIO_DT_SPEC_GET(BLT_SW_NODE, gpios);
-
-/* LED definitions */
 #define LED0_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 
+static const struct gpio_dt_spec pw_button = GPIO_DT_SPEC_GET(PW_SW_NODE, gpios);
+static const struct gpio_dt_spec blt_button = GPIO_DT_SPEC_GET(BLT_SW_NODE, gpios);
 static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
 
-/* Button state tracking */
-struct button_state
+/* --- Per-button state --- */
+struct press_state
 {
     bool pressed;
     int64_t press_time;
-    bool long_press_handled;
+    bool long_handled;
 };
 
-static struct button_state pw_button_state = {0};
-static struct button_state blt_button_state = {0};
+/* Per-button actions (short/long) */
+typedef void (*btn_action_fn)(void *user);
 
-/* Work items for handling button press logic */
-static struct k_work pw_button_work;
-static struct k_work blt_button_work;
-
-/* Timers for long press detection */
-static struct k_timer pw_long_press_timer;
-static struct k_timer blt_long_press_timer;
-
-/* Function prototypes */
-void pw_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
-void blt_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
-void pw_button_work_handler(struct k_work *work);
-void blt_button_work_handler(struct k_work *work);
-void pw_long_press_handler(struct k_timer *timer);
-void blt_long_press_handler(struct k_timer *timer);
-
-/* GPIO callbacks */
-static struct gpio_callback pw_button_cb_data;
-static struct gpio_callback blt_button_cb_data;
-
-/* PW Button Functions */
-void pw_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+/* Generic button context */
+struct button_ctx
 {
-    k_work_submit(&pw_button_work);
+    const char *name;
+    struct gpio_dt_spec btn;
+
+    /* Press tracking */
+    struct press_state st;
+
+    /* Infra */
+    struct k_work_delayable work; /* debounced edge handling */
+    struct k_timer long_timer;    /* long-press expiry */
+    struct gpio_callback irq_cb;
+
+    /* User hooks */
+    btn_action_fn on_short;
+    btn_action_fn on_long;
+    void *user; /* optional payload for actions */
+};
+
+/* --- Forward decls --- */
+static void btn_irq_common(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
+static void btn_work_handler(struct k_work *work);
+static void btn_long_handler(struct k_timer *timer);
+
+/* --- Per-button actions --- */
+static void act_pw_short(void *user)
+{
+    gpio_pin_toggle_dt(&led0);
+    printk("PW: short -> toggle LED0\n");
 }
 
-void pw_button_work_handler(struct k_work *work)
+static void act_pw_long(void *user)
 {
-    int button_val = gpio_pin_get_dt(&pw_button);
-    int64_t current_time = k_uptime_get();
+    gpio_pin_set_dt(&led0, 1);
+    gpio_pin_set_dt(&led1, 1);
+    printk("PW: long -> both LEDs ON\n");
+}
 
-    if (button_val == 1)
-    { // Button pressed (assuming active high)
-        if (!pw_button_state.pressed)
+static void act_blt_short(void *user)
+{
+    gpio_pin_toggle_dt(&led1);
+    printk("BLT: short -> toggle LED1\n");
+}
+
+static void act_blt_long(void *user)
+{
+    gpio_pin_set_dt(&led0, 0);
+    gpio_pin_set_dt(&led1, 0);
+    printk("BLT: long -> both LEDs OFF\n");
+}
+
+/* --- Context instances --- */
+static struct button_ctx pw_ctx = {
+    .name = "PW",
+    .btn = {0}, /* filled from pw_button in init */
+    .on_short = act_pw_short,
+    .on_long = act_pw_long,
+};
+
+static struct button_ctx blt_ctx = {
+    .name = "BLT",
+    .btn = {0}, /* filled from blt_button in init */
+    .on_short = act_blt_short,
+    .on_long = act_blt_long,
+};
+
+/* --- Shared handlers --- */
+static void btn_irq_common(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+    ARG_UNUSED(dev);
+    ARG_UNUSED(pins);
+    struct button_ctx *ctx = CONTAINER_OF(cb, struct button_ctx, irq_cb);
+    /* Debounce via delayed work */
+    k_work_reschedule(&ctx->work, K_MSEC(DEBOUNCE_TIME_MS));
+}
+
+static void btn_work_handler(struct k_work *work)
+{
+    struct k_work_delayable *dw = CONTAINER_OF(work, struct k_work_delayable, work);
+    struct button_ctx *ctx = CONTAINER_OF(dw, struct button_ctx, work);
+
+    int val = gpio_pin_get_dt(&ctx->btn);
+    int64_t now = k_uptime_get();
+
+    if (val)
+    {
+        /* Logical pressed (DT handles ACTIVE_LOW/HIGH) */
+        if (!ctx->st.pressed)
         {
-            pw_button_state.pressed = true;
-            pw_button_state.press_time = current_time;
-            pw_button_state.long_press_handled = false;
-
-            // Start long press timer
-            k_timer_start(&pw_long_press_timer, K_MSEC(LONG_PRESS_TIME_MS), K_NO_WAIT);
+            ctx->st.pressed = true;
+            ctx->st.press_time = now;
+            ctx->st.long_handled = false;
+            k_timer_start(&ctx->long_timer, K_MSEC(LONG_PRESS_TIME_MS), K_NO_WAIT);
         }
     }
     else
-    { // Button released
-        if (pw_button_state.pressed)
+    {
+        /* Released */
+        if (ctx->st.pressed)
         {
-            pw_button_state.pressed = false;
-            k_timer_stop(&pw_long_press_timer);
-
-            int64_t press_duration = current_time - pw_button_state.press_time;
-
-            if (!pw_button_state.long_press_handled && press_duration < LONG_PRESS_TIME_MS)
+            ctx->st.pressed = false;
+            k_timer_stop(&ctx->long_timer);
+            int64_t dur = now - ctx->st.press_time;
+            if (!ctx->st.long_handled && dur < LONG_PRESS_TIME_MS)
             {
-                // Short press - toggle LED0
-                gpio_pin_toggle_dt(&led0);
-                printk("PW Button: Short press - LED0 toggled\n");
+                if (ctx->on_short)
+                    ctx->on_short(ctx->user);
             }
         }
     }
 }
 
-void pw_long_press_handler(struct k_timer *timer)
+static void btn_long_handler(struct k_timer *timer)
 {
-    if (pw_button_state.pressed && !pw_button_state.long_press_handled)
+    struct button_ctx *ctx = k_timer_user_data_get(timer);
+    if (ctx->st.pressed && !ctx->st.long_handled)
     {
-        // Long press - turn on both LEDs
-        gpio_pin_set_dt(&led0, 1);
-        gpio_pin_set_dt(&led1, 1);
-        pw_button_state.long_press_handled = true;
-        printk("PW Button: Long press - Both LEDs turned ON\n");
+        if (ctx->on_long)
+            ctx->on_long(ctx->user);
+        ctx->st.long_handled = true;
     }
 }
 
-/* BLT Button Functions */
-void blt_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+/* --- Init helpers --- */
+static int leds_init(void)
 {
-    k_work_submit(&blt_button_work);
-}
-
-void blt_button_work_handler(struct k_work *work)
-{
-    int button_val = gpio_pin_get_dt(&blt_button);
-    int64_t current_time = k_uptime_get();
-
-    if (button_val == 1)
-    { // Button pressed (assuming active high)
-        if (!blt_button_state.pressed)
-        {
-            blt_button_state.pressed = true;
-            blt_button_state.press_time = current_time;
-            blt_button_state.long_press_handled = false;
-
-            // Start long press timer
-            k_timer_start(&blt_long_press_timer, K_MSEC(LONG_PRESS_TIME_MS), K_NO_WAIT);
-        }
-    }
-    else
-    { // Button released
-        if (blt_button_state.pressed)
-        {
-            blt_button_state.pressed = false;
-            k_timer_stop(&blt_long_press_timer);
-
-            int64_t press_duration = current_time - blt_button_state.press_time;
-
-            if (!blt_button_state.long_press_handled && press_duration < LONG_PRESS_TIME_MS)
-            {
-                // Short press - toggle LED1
-                gpio_pin_toggle_dt(&led1);
-                printk("BLT Button: Short press - LED1 toggled\n");
-            }
-        }
-    }
-}
-
-void blt_long_press_handler(struct k_timer *timer)
-{
-    if (blt_button_state.pressed && !blt_button_state.long_press_handled)
+    if (!device_is_ready(led0.port) || !device_is_ready(led1.port))
     {
-        // Long press - turn off both LEDs
-        gpio_pin_set_dt(&led0, 0);
-        gpio_pin_set_dt(&led1, 0);
-        blt_button_state.long_press_handled = true;
-        printk("BLT Button: Long press - Both LEDs turned OFF\n");
+        printk("Error: LED GPIO device not ready\n");
+        return -ENODEV;
     }
+    int ret = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_INACTIVE);
+    if (ret)
+        return ret;
+    ret = gpio_pin_configure_dt(&led1, GPIO_OUTPUT_INACTIVE);
+    return ret;
 }
 
+static int button_ctx_init(struct button_ctx *ctx, const struct gpio_dt_spec *src_spec)
+{
+    ctx->btn = *src_spec;
+
+    if (!device_is_ready(ctx->btn.port))
+    {
+        printk("Error: %s button device not ready\n", ctx->name);
+        return -ENODEV;
+    }
+
+    int ret = gpio_pin_configure_dt(&ctx->btn, GPIO_INPUT);
+    if (ret)
+        return ret;
+
+    /* Interrupt on both edges; add hardware debounce if supported */
+#ifdef GPIO_INT_DEBOUNCE
+    ret = gpio_pin_interrupt_configure_dt(&ctx->btn, GPIO_INT_EDGE_BOTH | GPIO_INT_DEBOUNCE);
+#else
+    ret = gpio_pin_interrupt_configure_dt(&ctx->btn, GPIO_INT_EDGE_BOTH);
+#endif
+    if (ret)
+        return ret;
+
+    /* Wire callbacks & timers */
+    gpio_init_callback(&ctx->irq_cb, btn_irq_common, BIT(ctx->btn.pin));
+    gpio_add_callback(ctx->btn.port, &ctx->irq_cb);
+
+    k_work_init_delayable(&ctx->work, btn_work_handler);
+
+    k_timer_init(&ctx->long_timer, btn_long_handler, NULL);
+    k_timer_user_data_set(&ctx->long_timer, ctx);
+
+    printk("%s button ready on %s pin %u\n", ctx->name, ctx->btn.port->name, ctx->btn.pin);
+    return 0;
+}
+
+/* --- Main --- */
 int main(void)
 {
-    int ret;
-
-    /* Check if LED devices are ready */
-    if (!device_is_ready(led0.port))
-    {
-        printk("Error: LED0 device not ready\n");
+    if (leds_init() != 0)
         return -1;
-    }
 
-    if (!device_is_ready(led1.port))
-    {
-        printk("Error: LED1 device not ready\n");
+    if (button_ctx_init(&pw_ctx, &pw_button) != 0)
         return -1;
-    }
-
-    /* Check if button devices are ready */
-    if (!device_is_ready(pw_button.port))
-    {
-        printk("Error: PW Button device not ready\n");
+    if (button_ctx_init(&blt_ctx, &blt_button) != 0)
         return -1;
-    }
 
-    if (!device_is_ready(blt_button.port))
-    {
-        printk("Error: BLT Button device not ready\n");
-        return -1;
-    }
-
-    /* Configure LEDs as outputs */
-    ret = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_INACTIVE);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure LED0\n");
-        return -1;
-    }
-
-    ret = gpio_pin_configure_dt(&led1, GPIO_OUTPUT_INACTIVE);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure LED1\n");
-        return -1;
-    }
-
-    /* Configure buttons as inputs */
-    ret = gpio_pin_configure_dt(&pw_button, GPIO_INPUT);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure PW Button\n");
-        return -1;
-    }
-
-    ret = gpio_pin_configure_dt(&blt_button, GPIO_INPUT);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure BLT Button\n");
-        return -1;
-    }
-
-    /* Configure interrupts on button pins (both edges to detect press and release) */
-    ret = gpio_pin_interrupt_configure_dt(&pw_button, GPIO_INT_EDGE_BOTH);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure PW Button interrupt\n");
-        return -1;
-    }
-
-    ret = gpio_pin_interrupt_configure_dt(&blt_button, GPIO_INT_EDGE_BOTH);
-    if (ret < 0)
-    {
-        printk("Error: Failed to configure BLT Button interrupt\n");
-        return -1;
-    }
-
-    /* Initialize work items */
-    k_work_init(&pw_button_work, pw_button_work_handler);
-    k_work_init(&blt_button_work, blt_button_work_handler);
-
-    /* Initialize timers */
-    k_timer_init(&pw_long_press_timer, pw_long_press_handler, NULL);
-    k_timer_init(&blt_long_press_timer, blt_long_press_handler, NULL);
-
-    /* Initialize and add GPIO callbacks */
-    gpio_init_callback(&pw_button_cb_data, pw_button_pressed, BIT(pw_button.pin));
-    gpio_init_callback(&blt_button_cb_data, blt_button_pressed, BIT(blt_button.pin));
-
-    gpio_add_callback(pw_button.port, &pw_button_cb_data);
-    gpio_add_callback(blt_button.port, &blt_button_cb_data);
-
-    printk("Button control system initialized\n");
-    printk("PW Button: Short press = toggle LED0, Long press = turn ON both LEDs\n");
-    printk("BLT Button: Short press = toggle LED1, Long press = turn OFF both LEDs\n");
+    printk("Buttons: short/long actions armed. Hold >= %d ms for long.\n", LONG_PRESS_TIME_MS);
 
     while (1)
     {
         k_msleep(SLEEP_TIME_MS);
     }
-
     return 0;
 }
