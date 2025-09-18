@@ -10,7 +10,7 @@ LOG_MODULE_REGISTER(CYCLES, LOG_LEVEL_INF);
 #define IDLE_DEG 110
 
 /* Defaults: 5 s spray, 7 s idle, 1 time */
-static struct cycle_cfg_t s_cfg = {5000, 7000, 1};
+static struct cycle_cfg_t s_cfg = {5000, 2000, 1};
 static struct cycle_state_t s_state = {0, 0, 0};
 
 static bool s_running = false;

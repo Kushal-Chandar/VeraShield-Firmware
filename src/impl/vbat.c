@@ -34,7 +34,7 @@ static bool led_on = false;                  // Current LED state
 #define VBAT_RED_MV 1500    // Low battery level
 
 /* ADC sampling interval - 5 minutes */
-#define ADC_SAMPLE_INTERVAL_MS (5 * 1000)
+#define ADC_SAMPLE_INTERVAL_MS (5 * 60 * 1000)
 
 /**
  * Convert voltage to battery percentage for BAS

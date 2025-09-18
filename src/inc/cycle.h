@@ -5,7 +5,7 @@
  * Cycle configuration: fixed servo angles.
  * Only durations and repeat count are configurable.
  */
-struct __packed cycle_cfg_t
+struct cycle_cfg_t
 {
     uint16_t spray_ms; /* spray duration in ms */
     uint16_t idle_ms;  /* idle duration in ms */
@@ -13,7 +13,7 @@ struct __packed cycle_cfg_t
 };
 
 /* Runtime state */
-struct __packed cycle_state_t
+struct cycle_state_t
 {
     uint8_t phase;         /* 0 Stopped, 1 Spray, 2 Idle, 3 Paused */
     uint16_t remaining_ms; /* ms left in current phase */

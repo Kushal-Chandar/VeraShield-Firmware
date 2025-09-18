@@ -18,12 +18,12 @@
 
 /* --- Pins from aliases --- */
 #define PW_SW_NODE DT_ALIAS(pw_sw)
-#define BLT_SW_NODE DT_ALIAS(blt_sw)
+#define SP_SW_NODE DT_ALIAS(sp_sw)
 #define LED0_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 
 static const struct gpio_dt_spec pw_button = GPIO_DT_SPEC_GET(PW_SW_NODE, gpios);
-static const struct gpio_dt_spec blt_button = GPIO_DT_SPEC_GET(BLT_SW_NODE, gpios);
+static const struct gpio_dt_spec blt_button = GPIO_DT_SPEC_GET(SP_SW_NODE, gpios);
 static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
 

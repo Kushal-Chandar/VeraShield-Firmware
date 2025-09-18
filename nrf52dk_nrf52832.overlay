@@ -36,8 +36,7 @@
     };
 
     aliases {
-        pw-sw = &button4;
-        blt-sw = &button5;
+        sp-sw = &button5;
     };
 
 };

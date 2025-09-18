@@ -17,7 +17,6 @@ enum slider_state
     SL_MID = 1,
     SL_HIGH = 2
 };
-static int last_mv = -1;
 static enum slider_state last_state = SL_LOW;
 
 /* Hysteresis (mV) — tune to your hardware */
@@ -44,25 +43,31 @@ int slider_init(void)
 
 int slider_read_millivolts(void)
 {
+    int err;
     int16_t raw;
     struct adc_sequence seq = {
         .buffer = &raw,
         .buffer_size = sizeof(raw),
     };
-    int err = adc_sequence_init_dt(&adc_slider, &seq);
-    if (!err)
-        err = adc_read(adc_slider.dev, &seq);
+    err = adc_sequence_init_dt(&adc_slider, &seq);
+    if (err)
+    {
+        LOG_ERR("adc_sequence_init_dt: %d", err);
+        return err;
+    }
+    err = adc_read(adc_slider.dev, &seq);
     if (err)
     {
         LOG_ERR("slider adc_read: %d", err);
         return err;
     }
     int mv = (int)raw;
-    if (adc_raw_to_millivolts_dt(&adc_slider, &mv) < 0)
+    err = adc_raw_to_millivolts_dt(&adc_slider, &mv);
+    if (err < 0)
     {
-        LOG_WRN("Conversion not available)");
+        LOG_ERR("adc_raw_to_millivolts_dt: %d", err);
+        return err;
     }
-    last_mv = mv;
     return mv;
 }
 
@@ -102,17 +107,15 @@ void slider_state_to_cycle_cfg(int state, struct cycle_cfg_t *cfg_out)
     /* Edit these to your real timings */
     switch (state)
     {
-    case SL_LOW:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 300, .idle_ms = 2000, .repeats = 2};
+    case SL_HIGH:
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 10000, .idle_ms = 2000, .repeats = 5};
         break;
     case SL_MID:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 600, .idle_ms = 1500, .repeats = 3};
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 7000, .idle_ms = 2000, .repeats = 5};
         break;
-    case SL_HIGH:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 900, .idle_ms = 1000, .repeats = 4};
-        break;
+    case SL_LOW:
     default:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 600, .idle_ms = 1500, .repeats = 1};
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 5000, .idle_ms = 2000, .repeats = 5};
         break;
     }
 }

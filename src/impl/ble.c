@@ -145,7 +145,8 @@ static ssize_t cmd_write(struct bt_conn *conn,
     {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
-    do_shit(buf, len);
+    // do_shit(buf, len);
+    do_shit();
     return len; /* must return number of bytes “consumed” */
 }
 
