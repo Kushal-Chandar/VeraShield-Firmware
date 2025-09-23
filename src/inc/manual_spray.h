@@ -3,6 +3,7 @@
 
 #include <zephyr/kernel.h>
 #include <stdbool.h>
+#include "cycle.h"
 
 // Device tree node identifiers
 #define SP_SW_NODE DT_ALIAS(sp_sw)
@@ -13,6 +14,6 @@ int manual_spray_init(void);
 int manual_spray_callback(void);
 bool is_spray_cycle_active(void);
 void manual_spray_stop(void);
-void spray_action();
+void spray_action_with_cfg(struct cycle_cfg_t);
 
 #endif /* MANUAL_SPRAY_H */

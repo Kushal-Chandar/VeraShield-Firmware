@@ -7,6 +7,9 @@
 #include <zephyr/drivers/gpio.h>
 #include "ble.h"
 #include "cycle.h"
+#include "vbat.h"
+#include "manual_spray.h"
+#include "slider.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
