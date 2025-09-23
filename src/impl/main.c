@@ -1,70 +1,118 @@
-/*
- * Copyright (c) 2018 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
- */
-
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/gap.h>
 #include <zephyr/bluetooth/uuid.h>
-#include <zephyr/settings/settings.h>
 #include <zephyr/bluetooth/conn.h>
-// #include <dk_buttons_and_leds.h>
 #include <zephyr/drivers/gpio.h>
-
 #include "ble.h"
-#include "vbat.h"
 #include "cycle.h"
-#include "servo.h" /* if you use it */
-#include "slider.h"
-#include "manual_spray.h"
-
-#include "slider.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
-// #define SLEEP_TIME_MS 10 * 60 * 1000
-#define SLEEP_TIME_MS 1000
+/* ==== Advertising params: connectable + identity ==== */
+static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
+    (BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY),
+    800, /* 500 ms */
+    801, /* 500.625 ms */
+    NULL /* undirected */
+);
 
-static int settings_runtime_load(void)
+#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
+#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
+
+/* ==== LED from devicetree (alias: led2). Change alias if your board uses led0/led1/etc. ==== */
+static const struct gpio_dt_spec status_led = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0});
+
+/* Blink timing */
+#define RUN_LED_BLINK_INTERVAL 1000 /* ms */
+
+/* Advertising data: flags + device name */
+static const struct bt_data ad[] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
+};
+
+/* Scan response: advertise your custom 128-bit Service UUID */
+static const struct bt_data sd[] = {
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_MACHHAR_SERVICE_VAL),
+};
+
+/* --- simple state (no atomics/dk) --- */
+static bool is_connected = false;
+static bool is_advertising = false;
+
+/* Work item to start advertising */
+static struct k_work adv_work;
+
+static void adv_work_handler(struct k_work *work)
 {
-#if defined(CONFIG_BT_DIS_SETTINGS)
-    settings_runtime_set("bt/dis/model",
-                         "Zephyr Model",
-                         sizeof("Zephyr Model"));
-    settings_runtime_set("bt/dis/manuf",
-                         "Zephyr Manufacturer",
-                         sizeof("Zephyr Manufacturer"));
-#if defined(CONFIG_BT_DIS_SERIAL_NUMBER)
-    settings_runtime_set("bt/dis/serial",
-                         CONFIG_BT_DIS_SERIAL_NUMBER_STR,
-                         sizeof(CONFIG_BT_DIS_SERIAL_NUMBER_STR));
-#endif
-#if defined(CONFIG_BT_DIS_SW_REV)
-    settings_runtime_set("bt/dis/sw",
-                         CONFIG_BT_DIS_SW_REV_STR,
-                         sizeof(CONFIG_BT_DIS_SW_REV_STR));
-#endif
-#if defined(CONFIG_BT_DIS_FW_REV)
-    settings_runtime_set("bt/dis/fw",
-                         CONFIG_BT_DIS_FW_REV_STR,
-                         sizeof(CONFIG_BT_DIS_FW_REV_STR));
-#endif
-#if defined(CONFIG_BT_DIS_HW_REV)
-    settings_runtime_set("bt/dis/hw",
-                         CONFIG_BT_DIS_HW_REV_STR,
-                         sizeof(CONFIG_BT_DIS_HW_REV_STR));
-#endif
-#endif
-    return 0;
+    int err = bt_le_adv_start(adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    if (err)
+    {
+        LOG_ERR("Advertising failed to start (err %d)", err);
+        return;
+    }
+    is_advertising = true;
+    LOG_INF("Advertising started");
 }
+
+static void advertising_start(void)
+{
+    k_work_submit(&adv_work);
+}
+
+/* Connection callbacks */
+static void on_connected(struct bt_conn *conn, uint8_t err)
+{
+    if (err)
+    {
+        LOG_ERR("Connection failed (err %u)", err);
+        return;
+    }
+    is_connected = true;
+    is_advertising = false;
+    gpio_pin_set_dt(&status_led, 1); /* solid while connected */
+    LOG_INF("Connected");
+}
+
+static void on_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    LOG_INF("Disconnected (reason %u)", reason);
+    is_connected = false;
+    /* Keep LED handled by main loop (it will blink again once adv restarts) */
+}
+
+static void recycled_cb(void)
+{
+    LOG_INF("Conn object recycled; restarting advertising");
+    advertising_start();
+}
+
+static struct bt_conn_cb connection_callbacks = {
+    .connected = on_connected,
+    .disconnected = on_disconnected,
+    .recycled = recycled_cb,
+};
 
 int main(void)
 {
-    int blink_status = 0;
     int err;
+
+    LOG_INF("Starting minimal BLE + status LED\n");
+
+    /* Init GPIO LED */
+    if (!device_is_ready(status_led.port))
+    {
+        LOG_ERR("status_led port not ready");
+        return -1;
+    }
+    err = gpio_pin_configure_dt(&status_led, GPIO_OUTPUT_INACTIVE);
+    if (err)
+    {
+        LOG_ERR("Failed to configure status LED (err %d)", err);
+        return -1;
+    }
 
     cycle_init();
     cycle_tick_start();
@@ -86,9 +134,40 @@ int main(void)
 
     manual_spray_callback();
 
-    for (;;)
+    /* Init BT */
+    err = bt_enable(NULL);
+    if (err)
     {
-        LOG_INF("f %d", slider_read_millivolts());
-        k_sleep(K_MSEC(SLEEP_TIME_MS));
+        LOG_ERR("Bluetooth init failed (err %d)", err);
+        return -1;
+    }
+    bt_conn_cb_register(&connection_callbacks);
+    LOG_INF("Bluetooth initialized");
+
+    /* Start advertising via work item */
+    k_work_init(&adv_work, adv_work_handler);
+    advertising_start();
+
+    /* Blink while advertising; solid while connected */
+    bool led_on = false;
+    while (1)
+    {
+        if (is_connected)
+        {
+            gpio_pin_set_dt(&status_led, 1);
+            k_sleep(K_MSEC(500));
+        }
+        else if (is_advertising)
+        {
+            led_on = !led_on;
+            gpio_pin_set_dt(&status_led, led_on);
+            k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
+        }
+        else
+        {
+            /* Not connected and not advertising (e.g., before start or on error) */
+            gpio_pin_set_dt(&status_led, 0);
+            k_sleep(K_MSEC(500));
+        }
     }
 }

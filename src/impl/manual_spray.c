@@ -56,7 +56,7 @@ static void start_cycle_work_handler(struct k_work *work)
     k_timer_start(&monitor_timer, K_MSEC(200), K_MSEC(200));
 }
 
-void spray_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+void spray_action()
 {
     if (current_state != STATE_IDLE)
     {
@@ -75,6 +75,28 @@ void spray_button_pressed(const struct device *dev, struct gpio_callback *cb, ui
 
     // Phase timer: switch to fast blink after 2 seconds
     k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
+}
+
+void spray_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+    // if (current_state != STATE_IDLE)
+    // {
+    //     LOG_WRN("Sequence already in progress");
+    //     return;
+    // }
+
+    // LOG_INF("Button Pressed - Starting 5s sequence");
+
+    // // Start slow blink phase (2 seconds)
+    // current_state = STATE_SLOW_BLINK;
+    // gpio_pin_set_dt(&led, 1);
+
+    // // Blink every 500ms (slow)
+    // k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
+
+    // // Phase timer: switch to fast blink after 2 seconds
+    // k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
+    spray_action();
 }
 
 static void phase_timer_handler(struct k_timer *timer)

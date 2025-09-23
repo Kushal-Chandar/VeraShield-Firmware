@@ -103,6 +103,9 @@ void cycle_start(void)
     s_paused = false;
     s_state.cycle_index = 0;
     enter_spray();
+    // Increment EEPROM spray counter by 1
+    // Store current time from rtc into eeprom
+    // Store current Intensity in EEPROM, give out spray hours calculated from intensity
 }
 
 void cycle_stop(void)

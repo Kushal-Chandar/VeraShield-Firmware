@@ -13,5 +13,6 @@ int manual_spray_init(void);
 int manual_spray_callback(void);
 bool is_spray_cycle_active(void);
 void manual_spray_stop(void);
+void spray_action();
 
 #endif /* MANUAL_SPRAY_H */

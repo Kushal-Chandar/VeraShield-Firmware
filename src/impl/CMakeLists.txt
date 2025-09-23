@@ -1,6 +1,6 @@
 target_sources(app PRIVATE 
   main.c
-  # ble.c
+  ble.c
   servo.c
   cycle.c
   vbat.c
