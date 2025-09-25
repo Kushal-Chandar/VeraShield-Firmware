@@ -1,176 +1,121 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/gap.h>
-#include <zephyr/bluetooth/uuid.h>
-#include <zephyr/bluetooth/conn.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include "ble.h"
-#include "cycle.h"
-#include "vbat.h"
-#include "manual_spray.h"
-#include "slider.h"
+#include <zephyr/drivers/i2c.h>
+#include "pcf8563.h"
 
-LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-/* ==== Advertising params: connectable + identity ==== */
-static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
-    (BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY),
-    800, /* 500 ms */
-    801, /* 500.625 ms */
-    NULL /* undirected */
-);
+#define PCF8563_NODE DT_NODELABEL(pcf8563)
 
-#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
-
-/* ==== LED from devicetree (alias: led2). Change alias if your board uses led0/led1/etc. ==== */
-static const struct gpio_dt_spec status_led = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0});
-
-/* Blink timing */
-#define RUN_LED_BLINK_INTERVAL 1000 /* ms */
-
-/* Advertising data: flags + device name */
-static const struct bt_data ad[] = {
-    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
+static struct pcf8563 rtc = {
+    .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
+    .int_gpio = GPIO_DT_SPEC_GET(PCF8563_NODE, int_gpios),
 };
 
-/* Scan response: advertise your custom 128-bit Service UUID */
-static const struct bt_data sd[] = {
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_MACHHAR_SERVICE_VAL),
-};
+static void arm_next_minute(void);
 
-/* --- simple state (no atomics/dk) --- */
-static bool is_connected = false;
-static bool is_advertising = false;
-
-/* Work item to start advertising */
-static struct k_work adv_work;
-
-static void adv_work_handler(struct k_work *work)
+static void on_alarm(void *user)
 {
-    int err = bt_le_adv_start(adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-    if (err)
+    ARG_UNUSED(user);
+    LOG_INF("RTC alarm fired");
+    arm_next_minute();
+}
+
+static bool tm_sane(const struct tm *t)
+{
+    int y = t->tm_year + 1900;
+    return (y >= 2000 && y <= 2099) &&
+           (t->tm_mon >= 0 && t->tm_mon < 12) &&
+           (t->tm_mday >= 1 && t->tm_mday <= 31) &&
+           (t->tm_hour >= 0 && t->tm_hour < 24) &&
+           (t->tm_min >= 0 && t->tm_min < 60) &&
+           (t->tm_sec >= 0 && t->tm_sec < 60);
+}
+
+static void seed_time_from_build_if_needed(void)
+{
+    struct tm now;
+    if (pcf8563_get_time(&rtc, &now) == 0 && tm_sane(&now))
+        return;
+
+    static const char *mons = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    char m[4] = {0};
+    int d, y, H, M, S;
+    if (sscanf(__DATE__, "%3s %d %d", m, &d, &y) != 3)
+        return;
+    if (sscanf(__TIME__, "%d:%d:%d", &H, &M, &S) != 3)
+        return;
+    const char *p = strstr(mons, m);
+    int mon = p ? (int)((p - mons) / 3) : 0;
+
+    struct tm t = {
+        .tm_sec = S, .tm_min = M, .tm_hour = H, .tm_mday = d, .tm_mon = mon, .tm_year = y - 1900, .tm_isdst = -1};
+    if (pcf8563_set_time(&rtc, &t) == 0)
     {
-        LOG_ERR("Advertising failed to start (err %d)", err);
+        LOG_INF("RTC seeded: %04d-%02d-%02d %02d:%02d:%02d",
+                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                t.tm_hour, t.tm_min, t.tm_sec);
+    }
+}
+
+static void arm_next_minute(void)
+{
+    struct tm now;
+    if (pcf8563_get_time(&rtc, &now) != 0)
+    {
+        LOG_ERR("get_time failed");
         return;
     }
-    is_advertising = true;
-    LOG_INF("Advertising started");
-}
 
-static void advertising_start(void)
-{
-    k_work_submit(&adv_work);
-}
-
-/* Connection callbacks */
-static void on_connected(struct bt_conn *conn, uint8_t err)
-{
-    if (err)
+    int next_min = (now.tm_min + 1) % 60;
+    int hour = now.tm_hour;
+    if (next_min == 0)
     {
-        LOG_ERR("Connection failed (err %u)", err);
+        hour = (hour + 1) % 24; /* handle hour rollover */
+    }
+
+    int rc = pcf8563_set_alarm_hm(&rtc, hour, next_min);
+    if (rc)
+    {
+        LOG_ERR("set_alarm_hm failed: %d", rc);
         return;
     }
-    is_connected = true;
-    is_advertising = false;
-    gpio_pin_set_dt(&status_led, 1); /* solid while connected */
-    LOG_INF("Connected");
+
+    LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d; armed alarm at %02d:%02d",
+            now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
+            now.tm_hour, now.tm_min, now.tm_sec,
+            hour, next_min);
 }
 
-static void on_disconnected(struct bt_conn *conn, uint8_t reason)
+void main(void)
 {
-    LOG_INF("Disconnected (reason %u)", reason);
-    is_connected = false;
-    /* Keep LED handled by main loop (it will blink again once adv restarts) */
-}
-
-static void recycled_cb(void)
-{
-    LOG_INF("Conn object recycled; restarting advertising");
-    advertising_start();
-}
-
-static struct bt_conn_cb connection_callbacks = {
-    .connected = on_connected,
-    .disconnected = on_disconnected,
-    .recycled = recycled_cb,
-};
-
-int main(void)
-{
-    int err;
-
-    LOG_INF("Starting minimal BLE + status LED\n");
-
-    /* Init GPIO LED */
-    if (!device_is_ready(status_led.port))
+    int rc = pcf8563_init(&rtc);
+    if (rc)
     {
-        LOG_ERR("status_led port not ready");
-        return -1;
-    }
-    err = gpio_pin_configure_dt(&status_led, GPIO_OUTPUT_INACTIVE);
-    if (err)
-    {
-        LOG_ERR("Failed to configure status LED (err %d)", err);
-        return -1;
+        LOG_ERR("RTC init failed: %d", rc);
+        return;
     }
 
-    cycle_init();
-    cycle_tick_start();
+    pcf8563_set_alarm_callback(&rtc, on_alarm, NULL);
 
-    /* Optional initial config (will be replaced on first button press) */
-    struct cycle_cfg_t init = {.spray_ms = 2000, .idle_ms = 3000, .repeats = 0};
-    cycle_set_cfg(&init);
+    /* Make sure INT is released before arming */
+    (void)pcf8563_alarm_clear_flag(&rtc);
 
-    // settings_runtime_load();
+    seed_time_from_build_if_needed();
+    arm_next_minute();
 
-    if (vbat_init() == 0)
-        vbat_start();
-
-    if (slider_init() != 0)
-        LOG_ERR("slider_init failed");
-
-    if (manual_spray_init() != 0)
-        LOG_ERR("manual_spray_init failed");
-
-    manual_spray_callback();
-
-    /* Init BT */
-    err = bt_enable(NULL);
-    if (err)
+    for (;;)
     {
-        LOG_ERR("Bluetooth init failed (err %d)", err);
-        return -1;
-    }
-    bt_conn_cb_register(&connection_callbacks);
-    LOG_INF("Bluetooth initialized");
-
-    /* Start advertising via work item */
-    k_work_init(&adv_work, adv_work_handler);
-    advertising_start();
-
-    /* Blink while advertising; solid while connected */
-    bool led_on = false;
-    while (1)
-    {
-        if (is_connected)
+        /* Optional heartbeat log every 10s */
+        struct tm now;
+        if (pcf8563_get_time(&rtc, &now) == 0)
         {
-            gpio_pin_set_dt(&status_led, 1);
-            k_sleep(K_MSEC(500));
+            LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d",
+                    now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
+                    now.tm_hour, now.tm_min, now.tm_sec);
         }
-        else if (is_advertising)
-        {
-            led_on = !led_on;
-            gpio_pin_set_dt(&status_led, led_on);
-            k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
-        }
-        else
-        {
-            /* Not connected and not advertising (e.g., before start or on error) */
-            gpio_pin_set_dt(&status_led, 0);
-            k_sleep(K_MSEC(500));
-        }
+        k_sleep(K_SECONDS(10));
     }
 }

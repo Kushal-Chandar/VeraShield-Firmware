@@ -11,8 +11,6 @@
 // For more help, browse the DeviceTree documentation at https: //docs.zephyrproject.org/latest/guides/dts/index.html
 // You can also visit the nRF DeviceTree extension documentation at https: //docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
 
-
-
 &spi1 {
     status = "disabled";
 };
@@ -42,7 +40,6 @@
 };
 
 
-
 &adc {
     #address-cells = <1>;
     #size-cells = <0>;
@@ -64,6 +61,8 @@
         zephyr,resolution = <12>;
     };
 };
+
+
 &spi2 {
     status = "disabled";
 };
@@ -86,8 +85,6 @@
     };
 };
 
-
-/* STEP 5.2 - Add the servo device */
 / {
     servo: servo {
         compatible = "pwm-servo";
@@ -98,7 +95,6 @@
     };
 };
 
-/* STEP 5.3 - Configure which pins pwm1 should use */
 &pwm1 {
     status = "okay";
     pinctrl-0 = <&pwm1_custom_motor>;
@@ -118,5 +114,26 @@
             psels = <NRF_PSEL(PWM_OUT0, 0, 6)>;
             low-power-enable;
         };
+    };
+};
+
+&i2c0 {
+    // ds3231: rtc@68 {
+        //     compatible = "i2c-device";
+        //     reg = <0x68>;
+        //     label = "ds3231";
+        //     status = "okay";
+    // };
+    pcf8563: rtc@51 {
+        compatible = "pcf8563";
+        reg = <0x51>;
+        status = "okay";
+        int-gpios = <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+    };
+    at24c32: eeprom@57 {
+        compatible = "i2c-device";
+        reg = <0x57>;
+        label = "at24c32";
+        status = "okay";
     };
 };

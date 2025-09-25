@@ -1,9 +1,12 @@
 target_sources(app PRIVATE 
   main.c
-  ble.c
-  servo.c
-  cycle.c
-  vbat.c
-  slider.c
-  manual_spray.c
+  at24c32.c
+  #ds3231.c
+  pcf8563.c
+  # ble.c
+  # servo.c
+  # cycle.c
+  # vbat.c
+  # slider.c
+  # manual_spray.c
 )

@@ -1,0 +1,229 @@
+/*
+ * at24c32.c - AT24C32 EEPROM Driver Implementation
+ */
+
+#include "at24c32.h"
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/logging/log.h>
+#include <string.h>
+
+LOG_MODULE_REGISTER(at24c32, LOG_LEVEL_INF);
+
+/* I2C device binding */
+#define I2C_NODE DT_NODELABEL(i2c0)
+static const struct device *i2c_dev = DEVICE_DT_GET(I2C_NODE);
+
+/* Low-level I2C functions */
+static int at24c32_write_addr(uint16_t addr, const uint8_t *data, size_t len)
+{
+    uint8_t buf[2 + AT24C32_PAGE_SIZE]; /* Address (2 bytes) + max page data */
+
+    if (len > AT24C32_PAGE_SIZE)
+    {
+        return -EINVAL;
+    }
+
+    buf[0] = (addr >> 8) & 0xFF; /* Address high byte */
+    buf[1] = addr & 0xFF;        /* Address low byte */
+
+    if (data && len > 0)
+    {
+        memcpy(&buf[2], data, len);
+    }
+
+    return i2c_write(i2c_dev, buf, 2 + len, AT24C32_ADDR);
+}
+
+static int at24c32_read_addr(uint16_t addr, uint8_t *data, size_t len)
+{
+    uint8_t addr_buf[2];
+    addr_buf[0] = (addr >> 8) & 0xFF; /* Address high byte */
+    addr_buf[1] = addr & 0xFF;        /* Address low byte */
+
+    return i2c_write_read(i2c_dev, AT24C32_ADDR, addr_buf, 2, data, len);
+}
+
+/* Wait for write cycle to complete */
+static int at24c32_wait_ready(void)
+{
+    int ret;
+    uint8_t dummy;
+
+    /* Poll device until it responds (write cycle complete) */
+    for (int i = 0; i < 50; i++)
+    { /* Max 50ms timeout */
+        ret = i2c_write(i2c_dev, &dummy, 0, AT24C32_ADDR);
+        if (ret == 0)
+        {
+            return 0; /* Device ready */
+        }
+        k_msleep(1);
+    }
+
+    LOG_ERR("AT24C32 write cycle timeout");
+    return -ETIMEDOUT;
+}
+
+/* Public API functions */
+int at24c32_init(void)
+{
+    if (!device_is_ready(i2c_dev))
+    {
+        LOG_ERR("I2C device not ready");
+        return -ENODEV;
+    }
+
+    /* Try to read first byte to verify device presence */
+    uint8_t test_data;
+    int ret = at24c32_read_addr(0, &test_data, 1);
+    if (ret)
+    {
+        LOG_ERR("AT24C32 probe failed (%d)", ret);
+        return ret;
+    }
+
+    LOG_INF("AT24C32 EEPROM found at 0x%02X", AT24C32_ADDR);
+    return 0;
+}
+
+int at24c32_is_ready(void)
+{
+    return at24c32_wait_ready();
+}
+
+int at24c32_write_byte(uint16_t addr, uint8_t data)
+{
+    if (addr > AT24C32_MAX_ADDR)
+    {
+        return -EINVAL;
+    }
+
+    int ret = at24c32_write_addr(addr, &data, 1);
+    if (ret)
+    {
+        LOG_ERR("Write byte failed at 0x%04X (%d)", addr, ret);
+        return ret;
+    }
+
+    return at24c32_wait_ready();
+}
+
+int at24c32_read_byte(uint16_t addr, uint8_t *data)
+{
+    if (addr > AT24C32_MAX_ADDR || !data)
+    {
+        return -EINVAL;
+    }
+
+    int ret = at24c32_read_addr(addr, data, 1);
+    if (ret)
+    {
+        LOG_ERR("Read byte failed at 0x%04X (%d)", addr, ret);
+    }
+
+    return ret;
+}
+
+int at24c32_write_page(uint16_t addr, const uint8_t *data, size_t len)
+{
+    if (addr > AT24C32_MAX_ADDR || !data || len == 0 || len > AT24C32_PAGE_SIZE)
+    {
+        return -EINVAL;
+    }
+
+    /* Check if write crosses page boundary */
+    if ((addr / AT24C32_PAGE_SIZE) != ((addr + len - 1) / AT24C32_PAGE_SIZE))
+    {
+        LOG_ERR("Write crosses page boundary (addr=0x%04X, len=%zu)", addr, len);
+        return -EINVAL;
+    }
+
+    int ret = at24c32_write_addr(addr, data, len);
+    if (ret)
+    {
+        LOG_ERR("Page write failed at 0x%04X (%d)", addr, ret);
+        return ret;
+    }
+
+    return at24c32_wait_ready();
+}
+
+int at24c32_read_bytes(uint16_t addr, uint8_t *data, size_t len)
+{
+    if (addr > AT24C32_MAX_ADDR || !data || len == 0 || (addr + len - 1) > AT24C32_MAX_ADDR)
+    {
+        return -EINVAL;
+    }
+
+    int ret = at24c32_read_addr(addr, data, len);
+    if (ret)
+    {
+        LOG_ERR("Read bytes failed at 0x%04X (%d)", addr, ret);
+    }
+
+    return ret;
+}
+
+int at24c32_write_string(uint16_t addr, const char *str)
+{
+    if (!str)
+    {
+        return -EINVAL;
+    }
+
+    size_t len = strlen(str) + 1; /* Include null terminator */
+    uint16_t current_addr = addr;
+    size_t remaining = len;
+
+    while (remaining > 0)
+    {
+        /* Calculate bytes to write in this page */
+        size_t page_offset = current_addr % AT24C32_PAGE_SIZE;
+        size_t bytes_in_page = AT24C32_PAGE_SIZE - page_offset;
+        size_t write_len = (remaining < bytes_in_page) ? remaining : bytes_in_page;
+
+        int ret = at24c32_write_page(current_addr, (uint8_t *)(str + (len - remaining)), write_len);
+        if (ret)
+        {
+            return ret;
+        }
+
+        current_addr += write_len;
+        remaining -= write_len;
+    }
+
+    return 0;
+}
+
+int at24c32_read_string(uint16_t addr, char *str, size_t max_len)
+{
+    if (!str || max_len == 0)
+    {
+        return -EINVAL;
+    }
+
+    int ret = at24c32_read_bytes(addr, (uint8_t *)str, max_len - 1);
+    if (ret)
+    {
+        return ret;
+    }
+
+    str[max_len - 1] = '\0'; /* Ensure null termination */
+    return 0;
+}
+
+int at24c32_clear_page(uint16_t page_num)
+{
+    if (page_num >= (AT24C32_SIZE / AT24C32_PAGE_SIZE))
+    {
+        return -EINVAL;
+    }
+
+    uint8_t zeros[AT24C32_PAGE_SIZE];
+    memset(zeros, 0, sizeof(zeros));
+
+    uint16_t addr = page_num * AT24C32_PAGE_SIZE;
+    return at24c32_write_page(addr, zeros, sizeof(zeros));
+}
