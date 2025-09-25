@@ -1,7 +1,6 @@
 target_sources(app PRIVATE 
   main.c
   at24c32.c
-  #ds3231.c
   pcf8563.c
   # ble.c
   # servo.c
