@@ -1,26 +1,23 @@
-#include "manual_spray.h"
-#include "cycle.h"
-#include "slider.h"
-
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 
+#include "manual_spray.h"
+#include "cycle.h"
+#include "slider.h"
+#include "led_ctrl.h"
+
 LOG_MODULE_REGISTER(MANUAL_SPRAY, LOG_LEVEL_INF);
 
-// GPIO definitions
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SP_SW_NODE, gpios);
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(SP_LED_NODE, gpios);
 static struct gpio_callback button_cb_data;
 
-// Simple timers for each phase
 static struct k_timer phase_timer;
 static struct k_timer blink_timer;
 static struct k_timer monitor_timer;
 
-// State variables
 static enum {
     STATE_IDLE,
     STATE_SLOW_BLINK,
@@ -29,7 +26,6 @@ static enum {
     STATE_MONITORING_CYCLE
 } current_state = STATE_IDLE;
 
-// ----- Optional-config context carried by the phase timer -----
 struct phase_ctx
 {
     bool has_cfg;
@@ -37,19 +33,17 @@ struct phase_ctx
 };
 static struct phase_ctx phase_context;
 
-// Function prototypes
 static void phase_timer_handler(struct k_timer *timer);
 static void blink_timer_handler(struct k_timer *timer);
 static void monitor_timer_handler(struct k_timer *timer);
 static void start_spray_cycle(void);
 static void start_spray_cycle_with_cfg(struct cycle_cfg_t cfg);
 
-// ----- Work item with optional config (flag + copy) -----
 struct cycle_work
 {
     struct k_work work;
-    bool has_cfg;             // true if s_cfg is valid
-    struct cycle_cfg_t s_cfg; // copied config when provided
+    bool has_cfg;
+    struct cycle_cfg_t s_cfg;
 };
 
 static struct cycle_work start_cycle_work;
@@ -62,7 +56,7 @@ static void start_cycle_work_handler(struct k_work *work)
 
     if (cw->has_cfg)
     {
-        cfg_used = cw->s_cfg; // use provided config
+        cfg_used = cw->s_cfg;
     }
     else
     {
@@ -81,8 +75,6 @@ static void start_cycle_work_handler(struct k_work *work)
     k_timer_start(&monitor_timer, K_MSEC(200), K_MSEC(200));
 }
 
-// ----- Public API: start the 5s sequence -----
-// 1) Auto mode: no config passed (derive from slider later in worker)
 void spray_action(void)
 {
     if (current_state != STATE_IDLE)
@@ -93,21 +85,16 @@ void spray_action(void)
 
     LOG_INF("Button Pressed - Starting 5s sequence (auto)");
 
-    // Stash "no config" into the phase context
     phase_context.has_cfg = false;
 
-    // Start slow blink phase (2 seconds)
     current_state = STATE_SLOW_BLINK;
-    gpio_pin_set_dt(&led, 1);
+    led_spray_set(true);
 
-    // Blink every 500ms (slow)
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
 
-    // Phase timer: switch to fast blink after 2 seconds
     k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
 }
 
-// 2) Configured mode: the caller provides a cycle config
 void spray_action_with_cfg(struct cycle_cfg_t cfg)
 {
     if (current_state != STATE_IDLE)
@@ -118,31 +105,24 @@ void spray_action_with_cfg(struct cycle_cfg_t cfg)
 
     LOG_INF("Button Pressed - Starting 5s sequence (custom cfg)");
 
-    // Stash config into the phase context
     phase_context.cfg = cfg;
     phase_context.has_cfg = true;
 
-    // Start slow blink phase (2 seconds)
     current_state = STATE_SLOW_BLINK;
-    gpio_pin_set_dt(&led, 1);
+    led_spray_set(true);
 
-    // Blink every 500ms (slow)
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
 
-    // Phase timer: switch to fast blink after 2 seconds
     k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
 }
 
 void spray_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-    // Default behavior: auto from slider.
-    // If you want a fixed config from the button, call spray_action_with_cfg(...) instead.
     spray_action();
 }
 
 static void phase_timer_handler(struct k_timer *timer)
 {
-    // Read the optional-config context that we stored at init time
     struct phase_ctx *ctx = (struct phase_ctx *)k_timer_user_data_get(timer);
 
     switch (current_state)
@@ -151,11 +131,9 @@ static void phase_timer_handler(struct k_timer *timer)
         LOG_INF("Switching to fast blink");
         current_state = STATE_FAST_BLINK;
 
-        // Change to fast blink (100ms)
         k_timer_stop(&blink_timer);
         k_timer_start(&blink_timer, K_MSEC(100), K_MSEC(100));
 
-        // Phase timer: switch to solid after 2 more seconds (total 4s)
         k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
         break;
 
@@ -163,11 +141,9 @@ static void phase_timer_handler(struct k_timer *timer)
         LOG_INF("LED now solid");
         current_state = STATE_SOLID;
 
-        // Stop blinking, LED solid on
         k_timer_stop(&blink_timer);
-        gpio_pin_set_dt(&led, 1);
+        led_spray_set(true);
 
-        // Phase timer: run next phase immediately (total ~5s)
         k_timer_start(&phase_timer, K_NO_WAIT, K_NO_WAIT);
         break;
 
@@ -190,10 +166,9 @@ static void phase_timer_handler(struct k_timer *timer)
 
 static void blink_timer_handler(struct k_timer *timer)
 {
-    // Simple toggle for blinking phases
     if (current_state == STATE_SLOW_BLINK || current_state == STATE_FAST_BLINK)
     {
-        gpio_pin_toggle_dt(&led);
+        led_spray_toggle();
     }
 }
 
@@ -205,18 +180,16 @@ static void monitor_timer_handler(struct k_timer *timer)
         cycle_get_state(&cycle_state);
 
         if (cycle_state.phase == 0)
-        { // Cycle stopped
+        {
             LOG_INF("Spray cycle completed");
             current_state = STATE_IDLE;
             k_timer_stop(&monitor_timer);
-            gpio_pin_set_dt(&led, 0);
-            // Reset pending config after completion
+            led_spray_set(false);
             phase_context.has_cfg = false;
         }
         else
         {
-            // Cycle still active, keep LED on
-            gpio_pin_set_dt(&led, 1);
+            led_spray_set(true);
         }
     }
 }
@@ -225,8 +198,7 @@ static void start_spray_cycle(void)
 {
     LOG_INF("Starting spray cycle (auto)");
     current_state = STATE_MONITORING_CYCLE;
-    gpio_pin_set_dt(&led, 1); // Keep LED solid
-
+    led_spray_set(true);
     start_cycle_work.has_cfg = false;
     k_work_submit(&start_cycle_work.work);
 }
@@ -235,14 +207,12 @@ static void start_spray_cycle_with_cfg(struct cycle_cfg_t cfg)
 {
     LOG_INF("Starting spray cycle (custom cfg)");
     current_state = STATE_MONITORING_CYCLE;
-    gpio_pin_set_dt(&led, 1); // Keep LED solid
-
-    start_cycle_work.s_cfg = cfg; // copy for safety
+    led_spray_set(true);
+    start_cycle_work.s_cfg = cfg;
     start_cycle_work.has_cfg = true;
     k_work_submit(&start_cycle_work.work);
 }
 
-// Function to check if cycle is active
 bool is_spray_cycle_active(void)
 {
     if (current_state == STATE_MONITORING_CYCLE)
@@ -254,7 +224,6 @@ bool is_spray_cycle_active(void)
     return false;
 }
 
-// Function to manually stop the cycle
 void manual_spray_stop(void)
 {
     if (current_state == STATE_MONITORING_CYCLE)
@@ -263,18 +232,17 @@ void manual_spray_stop(void)
         cycle_stop();
         current_state = STATE_IDLE;
         k_timer_stop(&monitor_timer);
-        gpio_pin_set_dt(&led, 0);
+        led_spray_set(false);
         phase_context.has_cfg = false;
     }
 
-    // Also stop sequence if in progress (covers blinking phases)
     if (current_state != STATE_IDLE)
     {
         LOG_INF("Stopping sequence");
         current_state = STATE_IDLE;
         k_timer_stop(&phase_timer);
         k_timer_stop(&blink_timer);
-        gpio_pin_set_dt(&led, 0);
+        led_spray_set(false);
         phase_context.has_cfg = false;
     }
 }
@@ -283,22 +251,9 @@ int manual_spray_init(void)
 {
     int ret;
 
-    if (!device_is_ready(led.port))
-    {
-        LOG_ERR("LED GPIO device not ready");
-        return -1;
-    }
-
     if (!device_is_ready(button.port))
     {
         LOG_ERR("Button GPIO device not ready");
-        return -1;
-    }
-
-    ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
-    if (ret < 0)
-    {
-        LOG_ERR("Failed to configure LED pin: %d", ret);
         return -1;
     }
 
@@ -309,15 +264,12 @@ int manual_spray_init(void)
         return -1;
     }
 
-    // Init work
     k_work_init(&start_cycle_work.work, start_cycle_work_handler);
 
-    // Initialize timers
     k_timer_init(&phase_timer, phase_timer_handler, NULL);
     k_timer_init(&blink_timer, blink_timer_handler, NULL);
     k_timer_init(&monitor_timer, monitor_timer_handler, NULL);
 
-    // Bind optional-config context to phase timer
     k_timer_user_data_set(&phase_timer, &phase_context);
 
     LOG_INF("Manual spray initialized successfully");

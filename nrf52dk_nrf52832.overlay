@@ -199,7 +199,6 @@
 
 / {
     zephyr,user {
-        /* Your pins: LE on P0.4 (active high), OE on P0.5 (active low) */
         le-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
         oe-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
     };

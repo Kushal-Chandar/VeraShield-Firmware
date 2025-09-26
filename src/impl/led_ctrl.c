@@ -3,7 +3,6 @@
 
 LOG_MODULE_REGISTER(led_ctrl, LOG_LEVEL_INF);
 
-/* --- Devicetree handles --- */
 #define USER_NODE DT_PATH(zephyr_user)
 #define SPI_NODE DT_NODELABEL(spi2)
 
@@ -14,7 +13,6 @@ static const struct spi_config spi_cfg = {
     .slave = 0,
 };
 
-/* Devices and state */
 static const struct device *spi_dev;
 static struct gpio_dt_spec le = GPIO_DT_SPEC_GET(USER_NODE, le_gpios);
 static struct gpio_dt_spec oe = GPIO_DT_SPEC_GET(USER_NODE, oe_gpios);
@@ -52,7 +50,6 @@ int led_ctrl_init(void)
 {
     int ret;
 
-    /* Resolve SPI */
     spi_dev = DEVICE_DT_GET(SPI_NODE);
     if (!device_is_ready(spi_dev))
     {
@@ -60,14 +57,12 @@ int led_ctrl_init(void)
         return -ENODEV;
     }
 
-    /* LE/OE from DT */
     if (!device_is_ready(le.port) || !device_is_ready(oe.port))
     {
         LOG_ERR("GPIO ports not ready");
         return -ENODEV;
     }
 
-    /* LE=0, OE=1 (disabled) on boot */
     ret = gpio_pin_configure_dt(&le, GPIO_OUTPUT_INACTIVE);
     if (ret)
     {
@@ -81,7 +76,6 @@ int led_ctrl_init(void)
         LOG_ERR("OE cfg failed: %d", ret);
         return ret;
     }
-    /* NOTE: for active-low, OUTPUT_INACTIVE means physical HIGH (disabled), which is what we want at init */
 
     /* Start with everything off in hardware and shadow */
     shadow_byte = 0x00;
@@ -89,13 +83,11 @@ int led_ctrl_init(void)
     if (ret)
         return ret;
 
-    /* Leave outputs disabled by default (OE logical 0 = inactive for active-low spec) */
     return 0;
 }
 
 void led_ctrl_enable(bool enable)
 {
-    /* For active-low OE: logical 1 => active (low), logical 0 => inactive (high) */
     gpio_pin_set_dt(&oe, enable ? 1 : 0);
 }
 

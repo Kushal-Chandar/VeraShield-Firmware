@@ -101,14 +101,13 @@ int pcf8563_alarm_irq_enable(struct pcf8563 *dev, bool enable)
 
 int pcf8563_init(struct pcf8563 *dev)
 {
-    /* 1) I2C ready */
     if (!device_is_ready(dev->i2c.bus))
     {
         LOG_ERR("I2C bus not ready");
         return -ENODEV;
     }
 
-    /* 2) Make sure oscillator is running (clear STOP) */
+    /* Make sure oscillator is running (clear STOP) */
     uint8_t c1;
     if (rd(dev, REG_CTRL1, &c1, 1) == 0)
     {
@@ -119,7 +118,6 @@ int pcf8563_init(struct pcf8563 *dev)
         }
     }
 
-    /* 3) INT GPIO from DT (open-drain active-low → falling edge) */
     if (!device_is_ready(dev->int_gpio.port))
     {
         LOG_ERR("INT GPIO port not ready");
@@ -136,13 +134,12 @@ int pcf8563_init(struct pcf8563 *dev)
     gpio_init_callback(&dev->gpio_cb, pcf8563_isr, BIT(dev->int_gpio.pin));
     gpio_add_callback(dev->int_gpio.port, &dev->gpio_cb);
 
-    /* 4) Clear stale flags and disable AIE/TIE initially */
+    /* Clear stale flags and disable AIE/TIE initially */
     uint8_t c2 = 0;
     (void)rd(dev, REG_CTRL2, &c2, 1);
     c2 &= ~(CTRL2_AF | CTRL2_TF | CTRL2_AIE | CTRL2_TIE);
     (void)wr8(dev, REG_CTRL2, c2);
 
-    /* 5) Bind and init work context */
     s_wctx.dev = dev;
     k_work_init(&s_wctx.work, pcf8563_work_handler);
 

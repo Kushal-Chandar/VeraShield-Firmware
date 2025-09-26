@@ -1,32 +1,27 @@
-/*
- * at24c32.c - AT24C32 EEPROM Driver Implementation
- */
-
-#include "at24c32.h"
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
 
+#include "at24c32.h"
+
 LOG_MODULE_REGISTER(at24c32, LOG_LEVEL_INF);
 
-/* I2C device binding */
 #define I2C_NODE DT_NODELABEL(i2c0)
 static const struct device *i2c_dev = DEVICE_DT_GET(I2C_NODE);
 
-/* Low-level I2C functions */
 static int at24c32_write_addr(uint16_t addr, const uint8_t *data, size_t len)
 {
-    uint8_t buf[2 + AT24C32_PAGE_SIZE]; /* Address (2 bytes) + max page data */
+    uint8_t buf[2 + AT24C32_PAGE_SIZE];
 
     if (len > AT24C32_PAGE_SIZE)
     {
         return -EINVAL;
     }
 
-    buf[0] = (addr >> 8) & 0xFF; /* Address high byte */
-    buf[1] = addr & 0xFF;        /* Address low byte */
+    buf[0] = (addr >> 8) & 0xFF;
+    buf[1] = addr & 0xFF;
 
     if (data && len > 0)
     {
@@ -39,8 +34,8 @@ static int at24c32_write_addr(uint16_t addr, const uint8_t *data, size_t len)
 static int at24c32_read_addr(uint16_t addr, uint8_t *data, size_t len)
 {
     uint8_t addr_buf[2];
-    addr_buf[0] = (addr >> 8) & 0xFF; /* Address high byte */
-    addr_buf[1] = addr & 0xFF;        /* Address low byte */
+    addr_buf[0] = (addr >> 8) & 0xFF;
+    addr_buf[1] = addr & 0xFF;
 
     return i2c_write_read(i2c_dev, AT24C32_ADDR, addr_buf, 2, data, len);
 }
@@ -66,7 +61,6 @@ static int at24c32_wait_ready(void)
     return -ETIMEDOUT;
 }
 
-/* Public API functions */
 int at24c32_init(void)
 {
     if (!device_is_ready(i2c_dev))
@@ -75,7 +69,6 @@ int at24c32_init(void)
         return -ENODEV;
     }
 
-    /* Try to read first byte to verify device presence */
     uint8_t test_data;
     int ret = at24c32_read_addr(0, &test_data, 1);
     if (ret)
@@ -173,13 +166,12 @@ int at24c32_write_string(uint16_t addr, const char *str)
         return -EINVAL;
     }
 
-    size_t len = strlen(str) + 1; /* Include null terminator */
+    size_t len = strlen(str) + 1;
     uint16_t current_addr = addr;
     size_t remaining = len;
 
     while (remaining > 0)
     {
-        /* Calculate bytes to write in this page */
         size_t page_offset = current_addr % AT24C32_PAGE_SIZE;
         size_t bytes_in_page = AT24C32_PAGE_SIZE - page_offset;
         size_t write_len = (remaining < bytes_in_page) ? remaining : bytes_in_page;
@@ -210,7 +202,7 @@ int at24c32_read_string(uint16_t addr, char *str, size_t max_len)
         return ret;
     }
 
-    str[max_len - 1] = '\0'; /* Ensure null termination */
+    str[max_len - 1] = '\0'; // Ensure null termination
     return 0;
 }
 
