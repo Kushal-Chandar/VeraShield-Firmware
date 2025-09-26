@@ -11,9 +11,6 @@
 // For more help, browse the DeviceTree documentation at https: //docs.zephyrproject.org/latest/guides/dts/index.html
 // You can also visit the nRF DeviceTree extension documentation at https: //docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
 
-&spi1 {
-    status = "disabled";
-};
 
 / {
     zephyr,user {
@@ -36,6 +33,7 @@
     aliases {
         sp-sw = &button5;
     };
+
 
 };
 
@@ -63,9 +61,6 @@
 };
 
 
-&spi2 {
-    status = "disabled";
-};
 
 &uart0_sleep {
     group1 {
@@ -135,5 +130,77 @@
         reg = <0x57>;
         label = "at24c32";
         status = "okay";
+    };
+};
+
+
+&spi0 {
+    status = "disabled";
+
+};
+
+&spi1 {
+    status = "disabled";
+};
+
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-1 = <&uart0_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+&pinctrl {
+    uart0_default: uart0_default {
+        group1 {
+            psels = <
+            NRF_PSEL(UART_TX, 0, 6)   /* P0.06 as TX */
+            NRF_PSEL(UART_RX, 0, 8)   /* P0.08 as RX */
+            >;
+        };
+    };
+
+    uart0_sleep: uart0_sleep {
+        group1 {
+            psels = <
+            NRF_PSEL(UART_TX, 0, 6)
+            NRF_PSEL(UART_RX, 0, 8)
+            >;
+            low-power-enable;
+        };
+    };
+};
+
+&spi2 {
+    status = "okay";
+    pinctrl-0 = <&spi2_tlc_default>;
+    pinctrl-1 = <&spi2_tlc_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+&pinctrl {
+    spi2_tlc_default: spi2_tlc_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>;
+        };
+    };
+
+    spi2_tlc_sleep: spi2_tlc_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>;
+            low-power-enable;
+        };
+    };
+};
+
+/ {
+    zephyr,user {
+        /* Your pins: LE on P0.4 (active high), OE on P0.5 (active low) */
+        le-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+        oe-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
     };
 };
