@@ -12,13 +12,12 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/services/bas.h>
+#include <zephyr/logging/log.h>
 
 #include "ble.h"
 #include "cycle.h"
 #include "slider.h"
 #include "manual_spray.h"
-
-#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(BLE, LOG_LEVEL_INF);
 
@@ -90,20 +89,14 @@ static ssize_t remote_spray_write(struct bt_conn *conn,
 BT_GATT_SERVICE_DEFINE(
     machhar_svc,
     BT_GATT_PRIMARY_SERVICE(BT_UUID_MACHHAR_SERVICE),
-
-    /* READ + WRITE characteristic with correct perms */
     BT_GATT_CHARACTERISTIC(BT_UUID_MACHHAR_SCHEDULING,
                            BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
                            BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
                            schedule_read, schedule_write, NULL),
-
-    /* READ-only characteristic with READ perm */
     BT_GATT_CHARACTERISTIC(BT_UUID_MACHHAR_STATISTICS,
                            BT_GATT_CHRC_READ,
                            BT_GATT_PERM_READ,
                            statistics_read, NULL, NULL),
-
-    /* WRITE-only characteristic */
     BT_GATT_CHARACTERISTIC(BT_UUID_MACHHAR_REMOTE_SPRAY,
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
                            BT_GATT_PERM_WRITE,

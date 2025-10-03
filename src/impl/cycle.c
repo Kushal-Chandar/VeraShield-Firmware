@@ -74,7 +74,6 @@ static void tick_work(struct k_work *w)
     k_work_schedule(&cycle_work, K_MSEC(100));
 }
 
-/* API */
 int cycle_init(void)
 {
     servo_set_deg(IDLE_DEG);

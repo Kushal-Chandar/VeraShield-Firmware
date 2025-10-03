@@ -1,9 +1,8 @@
 /* main.c — quick test app for AT24C32 driver */
 
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
-#include <string.h>
-#include <stdint.h>
+#include <zephyr/logging/log.h>
+#include "led_ctrl.h"
 #include "at24c32.h"
 
 /* simple assert-like macro that prints and bails on failure */
@@ -22,46 +21,40 @@
         }                                               \
     } while (0)
 
-static void dump_hex(const uint8_t *buf, size_t len)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        printk("%02X ", buf[i]);
-        if ((i + 1) % 16 == 0)
-        {
-            printk("\n");
-        }
-    }
-    if (len % 16)
-    {
-        printk("\n");
-    }
-}
-
 void main(void)
 {
-    printk("\n=== AT24C32 smoke test ===\n");
-
-    /* 1) Initialize and poll ready */
-    CHECK_OK(at24c32_init());
-    CHECK_OK(at24c32_is_ready());
-
-    /* 2) Single-byte write/read at an arbitrary address */
+    int ret = led_ctrl_init();
+    if (ret)
     {
-        const uint16_t addr = 0x0123;
-        const uint8_t out = 0xA5;
-        uint8_t in = 0x00;
+        LOG_ERR("led_ctrl_init failed (%d)", ret);
+        return;
+    }
 
-        printk("\n[byte R/W] addr=0x%04X write=0x%02X\n", addr, out);
-        CHECK_OK(at24c32_write_byte(addr, out));
-        k_msleep(AT24C32_WRITE_DELAY_MS);
-        CHECK_OK(at24c32_read_byte(addr, &in));
-        printk("[byte R/W] read back=0x%02X %s\n", in, (in == out) ? "✓" : "✗");
-        if (in != out)
+    /* Enable outputs (OE active-low => drives pin low) */
+    led_ctrl_enable(true);
+    LOG_INF("LED controller initialized and outputs enabled");
+
+    /* Walk through each defined LED */
+    led_id_t leds[] = {LED_RED, LED_GREEN, LED_BLUE, LED_BLT, LED_PW, LED_SPR};
+    size_t count = ARRAY_SIZE(leds);
+
+    for (size_t i = 0; i < count; i++)
+    {
+        LOG_INF("Lighting LED %d", leds[i]);
+        led_ctrl_set(leds[i], true);
+        k_msleep(1000);
+        led_ctrl_set(leds[i], false);
+    }
+
+    /* Toggle all LEDs forever */
+    while (1)
+    {
+        LOG_INF("Toggling all LEDs");
+        for (size_t i = 0; i < count; i++)
         {
-            printk("Mismatch on single-byte R/W\n");
-            goto out;
+            led_ctrl_toggle(leds[i]);
         }
+        k_msleep(1000);
     }
 
     /* 3) Page write/read (aligned) */

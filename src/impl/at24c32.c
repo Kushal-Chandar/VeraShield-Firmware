@@ -1,25 +1,18 @@
-/*
- * at24c32.c - AT24C32 EEPROM Driver Implementation (drop-in replacement)
- */
-
-#include "at24c32.h"
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
 
+#include "at24c32.h"
+
 LOG_MODULE_REGISTER(at24c32, LOG_LEVEL_INF);
 
-/* I2C device binding */
 #define I2C_NODE DT_NODELABEL(i2c0)
 static const struct device *i2c_dev = DEVICE_DT_GET(I2C_NODE);
 
-/* ---------- Low-level helpers ---------- */
-
 static int at24c32_write_addr(uint16_t addr, const uint8_t *data, size_t len)
 {
-    /* 2 address bytes + up to one page of data */
     uint8_t buf[2 + AT24C32_PAGE_SIZE];
 
     if (len > AT24C32_PAGE_SIZE)
@@ -27,8 +20,8 @@ static int at24c32_write_addr(uint16_t addr, const uint8_t *data, size_t len)
         return -EINVAL;
     }
 
-    buf[0] = (addr >> 8) & 0xFF; /* high byte */
-    buf[1] = addr & 0xFF;        /* low byte */
+    buf[0] = (addr >> 8) & 0xFF;
+    buf[1] = addr & 0xFF;
 
     if (data && len > 0)
     {
@@ -66,8 +59,6 @@ static int at24c32_wait_ready(void)
     return -ETIMEDOUT;
 }
 
-/* ---------- Public API ---------- */
-
 int at24c32_init(void)
 {
     if (!device_is_ready(i2c_dev))
@@ -76,7 +67,6 @@ int at24c32_init(void)
         return -ENODEV;
     }
 
-    /* Probe by reading 1 byte at 0x0000 */
     uint8_t test_data;
     int ret = at24c32_read_addr(0, &test_data, 1);
     if (ret)

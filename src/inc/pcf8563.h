@@ -5,23 +5,21 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/kernel.h> /* <-- add this for k_work */
+#include <zephyr/kernel.h>
 #include <time.h>
 
 struct pcf8563
 {
     struct i2c_dt_spec i2c;
-    struct gpio_dt_spec int_gpio; /* from int-gpios */
+    struct gpio_dt_spec int_gpio;
     struct gpio_callback gpio_cb;
 
-    /* run callback out of interrupt context */
     struct k_work work;
 
     void (*alarm_cb)(void *user);
     void *alarm_user;
 };
 
-/* API */
 int pcf8563_init(struct pcf8563 *dev);
 void pcf8563_set_alarm_callback(struct pcf8563 *dev,
                                 void (*cb)(void *user), void *user);

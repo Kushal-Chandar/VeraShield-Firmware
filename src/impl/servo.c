@@ -3,6 +3,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/pwm.h>
 #include <stdint.h>
+
 #include "servo.h"
 
 LOG_MODULE_REGISTER(PWM_SERVO, LOG_LEVEL_INF);

@@ -6,11 +6,9 @@
 
 LOG_MODULE_REGISTER(SLIDER, LOG_LEVEL_INF);
 
-/* ADC: /zephyr,user named "slider" */
 static const struct adc_dt_spec adc_slider =
     ADC_DT_SPEC_GET_BY_NAME(DT_PATH(zephyr_user), slider);
 
-/* Keep last state for hysteresis behavior across presses */
 enum slider_state
 {
     SL_LOW = 0,
@@ -104,7 +102,6 @@ int slider_classify_from_mv(int mv)
 
 void slider_state_to_cycle_cfg(int state, struct cycle_cfg_t *cfg_out)
 {
-    /* Edit these to your real timings */
     switch (state)
     {
     case SL_HIGH:
