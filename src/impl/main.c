@@ -1,121 +1,187 @@
+/* main.c — quick test app for AT24C32 driver */
+
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-#include <zephyr/devicetree.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/i2c.h>
-#include "pcf8563.h"
+#include <zephyr/sys/printk.h>
+#include <string.h>
+#include <stdint.h>
+#include "at24c32.h"
 
-LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
+/* simple assert-like macro that prints and bails on failure */
+#define CHECK_OK(expr)                                  \
+    do                                                  \
+    {                                                   \
+        int __rc = (expr);                              \
+        if (__rc != 0)                                  \
+        {                                               \
+            printk("FAIL: %s -> rc=%d\n", #expr, __rc); \
+            goto out;                                   \
+        }                                               \
+        else                                            \
+        {                                               \
+            printk("OK  : %s\n", #expr);                \
+        }                                               \
+    } while (0)
 
-#define PCF8563_NODE DT_NODELABEL(pcf8563)
-
-static struct pcf8563 rtc = {
-    .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
-    .int_gpio = GPIO_DT_SPEC_GET(PCF8563_NODE, int_gpios),
-};
-
-static void arm_next_minute(void);
-
-static void on_alarm(void *user)
+static void dump_hex(const uint8_t *buf, size_t len)
 {
-    ARG_UNUSED(user);
-    LOG_INF("RTC alarm fired");
-    arm_next_minute();
-}
-
-static bool tm_sane(const struct tm *t)
-{
-    int y = t->tm_year + 1900;
-    return (y >= 2000 && y <= 2099) &&
-           (t->tm_mon >= 0 && t->tm_mon < 12) &&
-           (t->tm_mday >= 1 && t->tm_mday <= 31) &&
-           (t->tm_hour >= 0 && t->tm_hour < 24) &&
-           (t->tm_min >= 0 && t->tm_min < 60) &&
-           (t->tm_sec >= 0 && t->tm_sec < 60);
-}
-
-static void seed_time_from_build_if_needed(void)
-{
-    struct tm now;
-    if (pcf8563_get_time(&rtc, &now) == 0 && tm_sane(&now))
-        return;
-
-    static const char *mons = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    char m[4] = {0};
-    int d, y, H, M, S;
-    if (sscanf(__DATE__, "%3s %d %d", m, &d, &y) != 3)
-        return;
-    if (sscanf(__TIME__, "%d:%d:%d", &H, &M, &S) != 3)
-        return;
-    const char *p = strstr(mons, m);
-    int mon = p ? (int)((p - mons) / 3) : 0;
-
-    struct tm t = {
-        .tm_sec = S, .tm_min = M, .tm_hour = H, .tm_mday = d, .tm_mon = mon, .tm_year = y - 1900, .tm_isdst = -1};
-    if (pcf8563_set_time(&rtc, &t) == 0)
+    for (size_t i = 0; i < len; i++)
     {
-        LOG_INF("RTC seeded: %04d-%02d-%02d %02d:%02d:%02d",
-                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
-                t.tm_hour, t.tm_min, t.tm_sec);
+        printk("%02X ", buf[i]);
+        if ((i + 1) % 16 == 0)
+        {
+            printk("\n");
+        }
     }
-}
-
-static void arm_next_minute(void)
-{
-    struct tm now;
-    if (pcf8563_get_time(&rtc, &now) != 0)
+    if (len % 16)
     {
-        LOG_ERR("get_time failed");
-        return;
+        printk("\n");
     }
-
-    int next_min = (now.tm_min + 1) % 60;
-    int hour = now.tm_hour;
-    if (next_min == 0)
-    {
-        hour = (hour + 1) % 24; /* handle hour rollover */
-    }
-
-    int rc = pcf8563_set_alarm_hm(&rtc, hour, next_min);
-    if (rc)
-    {
-        LOG_ERR("set_alarm_hm failed: %d", rc);
-        return;
-    }
-
-    LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d; armed alarm at %02d:%02d",
-            now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
-            now.tm_hour, now.tm_min, now.tm_sec,
-            hour, next_min);
 }
 
 void main(void)
 {
-    int rc = pcf8563_init(&rtc);
-    if (rc)
+    printk("\n=== AT24C32 smoke test ===\n");
+
+    /* 1) Initialize and poll ready */
+    CHECK_OK(at24c32_init());
+    CHECK_OK(at24c32_is_ready());
+
+    /* 2) Single-byte write/read at an arbitrary address */
     {
-        LOG_ERR("RTC init failed: %d", rc);
-        return;
-    }
+        const uint16_t addr = 0x0123;
+        const uint8_t out = 0xA5;
+        uint8_t in = 0x00;
 
-    pcf8563_set_alarm_callback(&rtc, on_alarm, NULL);
-
-    /* Make sure INT is released before arming */
-    (void)pcf8563_alarm_clear_flag(&rtc);
-
-    seed_time_from_build_if_needed();
-    arm_next_minute();
-
-    for (;;)
-    {
-        /* Optional heartbeat log every 10s */
-        struct tm now;
-        if (pcf8563_get_time(&rtc, &now) == 0)
+        printk("\n[byte R/W] addr=0x%04X write=0x%02X\n", addr, out);
+        CHECK_OK(at24c32_write_byte(addr, out));
+        k_msleep(AT24C32_WRITE_DELAY_MS);
+        CHECK_OK(at24c32_read_byte(addr, &in));
+        printk("[byte R/W] read back=0x%02X %s\n", in, (in == out) ? "✓" : "✗");
+        if (in != out)
         {
-            LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d",
-                    now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
-                    now.tm_hour, now.tm_min, now.tm_sec);
+            printk("Mismatch on single-byte R/W\n");
+            goto out;
         }
-        k_sleep(K_SECONDS(10));
     }
+
+    /* 3) Page write/read (aligned) */
+    {
+        const uint16_t page_num = 10;
+        const uint16_t page_base = page_num * AT24C32_PAGE_SIZE;
+        uint8_t wr[AT24C32_PAGE_SIZE];
+        uint8_t rd[AT24C32_PAGE_SIZE];
+
+        for (size_t i = 0; i < sizeof(wr); i++)
+        {
+            wr[i] = (uint8_t)i; /* simple 0..31 pattern */
+        }
+
+        printk("\n[page R/W] page=%u base=0x%04X len=%u\n",
+               page_num, page_base, (unsigned)sizeof(wr));
+        CHECK_OK(at24c32_write_page(page_base, wr, sizeof(wr)));
+        k_msleep(AT24C32_WRITE_DELAY_MS);
+        memset(rd, 0, sizeof(rd));
+        CHECK_OK(at24c32_read_bytes(page_base, rd, sizeof(rd)));
+
+        if (memcmp(wr, rd, sizeof(wr)) != 0)
+        {
+            printk("Page data mismatch!\nWR: ");
+            dump_hex(wr, sizeof(wr));
+            printk("RD: ");
+            dump_hex(rd, sizeof(rd));
+            goto out;
+        }
+        else
+        {
+            printk("[page R/W] verify ✓\n");
+        }
+    }
+
+    /* 4) String write/read (C-string, includes terminator if driver does that) */
+    {
+        const uint16_t str_addr = 0x0200;
+        const char *msg = "hello from zephyr+AT24C32";
+        char buf[64];
+
+        printk("\n[string R/W] addr=0x%04X write=\"%s\"\n", str_addr, msg);
+        CHECK_OK(at24c32_write_string(str_addr, msg));
+        k_msleep(AT24C32_WRITE_DELAY_MS);
+        memset(buf, 0, sizeof(buf));
+        CHECK_OK(at24c32_read_string(str_addr, buf, sizeof(buf)));
+        printk("[string R/W] read back=\"%s\"\n", buf);
+
+        if (strncmp(msg, buf, strlen(msg)) != 0)
+        {
+            printk("String mismatch!\n");
+            goto out;
+        }
+        else
+        {
+            printk("[string R/W] verify ✓\n");
+        }
+    }
+
+    /* 5) "Clear" page by filling with 0x00 and verifying */
+    {
+        const uint16_t page_to_clear = 11;
+        const uint16_t base = page_to_clear * AT24C32_PAGE_SIZE;
+        uint8_t rd[AT24C32_PAGE_SIZE];
+
+        printk("\n[clear page] page=%u (fill with 0x00)\n", page_to_clear);
+        CHECK_OK(at24c32_clear_page(page_to_clear)); /* writes 0x00 over the page */
+        CHECK_OK(at24c32_is_ready());
+        CHECK_OK(at24c32_read_bytes(base, rd, sizeof(rd)));
+
+        bool all_00 = true;
+        for (size_t i = 0; i < sizeof(rd); i++)
+        {
+            if (rd[i] != 0x00)
+            {
+                all_00 = false;
+                break;
+            }
+        }
+        printk("[clear page] verify %s\n", all_00 ? "✓ (all 0x00)" : "✗");
+        if (!all_00)
+        {
+            printk("Page not filled to 0x00\n");
+            goto out;
+        }
+    }
+
+    /* 6) Boundary test: last byte */
+    {
+        const uint16_t last_addr = AT24C32_MAX_ADDR;
+        uint8_t out = 0x3C, in = 0;
+        printk("\n[boundary] last byte addr=0x%04X\n", last_addr);
+        CHECK_OK(at24c32_write_byte(last_addr, out));
+        k_msleep(AT24C32_WRITE_DELAY_MS);
+        CHECK_OK(at24c32_read_byte(last_addr, &in));
+        printk("[boundary] read back=0x%02X %s\n", in, (in == out) ? "✓" : "✗");
+        if (in != out)
+        {
+            goto out;
+        }
+    }
+
+    /* 7) Guarded negative test: attempt to read beyond end (expect error) */
+    {
+        uint8_t rd[8];
+        uint16_t near_end = AT24C32_MAX_ADDR - 3; /* 4092 */
+        printk("\n[negative] read 8 bytes starting 0x%04X (should fail)\n", near_end);
+        int rc = at24c32_read_bytes(near_end, rd, sizeof(rd));
+        if (rc == 0)
+        {
+            printk("Unexpected success reading past end! Driver should bound-check.\n");
+            /* not fatal to the rest of tests, just warn */
+        }
+        else
+        {
+            printk("Got expected error rc=%d ✓\n", rc);
+        }
+    }
+
+    printk("\n=== All tests completed ===\n");
+out:
+    return;
 }
