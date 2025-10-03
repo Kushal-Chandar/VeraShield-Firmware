@@ -40,19 +40,17 @@ static int at24c32_read_addr(uint16_t addr, uint8_t *data, size_t len)
     return i2c_write_read(i2c_dev, AT24C32_ADDR, addr_buf, 2, data, len);
 }
 
-/* Wait for write cycle to complete */
+/* Poll device for end-of-write ACK (acknowledge polling) */
 static int at24c32_wait_ready(void)
 {
-    int ret;
-    uint8_t dummy;
-
-    /* Poll device until it responds (write cycle complete) */
-    for (int i = 0; i < 50; i++)
-    { /* Max 50ms timeout */
-        ret = i2c_write(i2c_dev, &dummy, 0, AT24C32_ADDR);
+    /* Typical tWC ~5ms, max 10ms. Guard for ~100ms to be safe. */
+    for (int i = 0; i < 100; i++)
+    {
+        /* NULL pointer with length 0 is fine; this just probes the slave. */
+        int ret = i2c_write(i2c_dev, NULL, 0, AT24C32_ADDR);
         if (ret == 0)
         {
-            return 0; /* Device ready */
+            return 0;
         }
         k_msleep(1);
     }
@@ -115,7 +113,6 @@ int at24c32_read_byte(uint16_t addr, uint8_t *data)
     {
         LOG_ERR("Read byte failed at 0x%04X (%d)", addr, ret);
     }
-
     return ret;
 }
 
@@ -126,7 +123,14 @@ int at24c32_write_page(uint16_t addr, const uint8_t *data, size_t len)
         return -EINVAL;
     }
 
-    /* Check if write crosses page boundary */
+    /* End address must be inside device */
+    if ((uint32_t)addr + len - 1 > AT24C32_MAX_ADDR)
+    {
+        LOG_ERR("Write beyond end (addr=0x%04X, len=%zu)", addr, len);
+        return -EINVAL;
+    }
+
+    /* Reject page-boundary crossing */
     if ((addr / AT24C32_PAGE_SIZE) != ((addr + len - 1) / AT24C32_PAGE_SIZE))
     {
         LOG_ERR("Write crosses page boundary (addr=0x%04X, len=%zu)", addr, len);
@@ -145,7 +149,11 @@ int at24c32_write_page(uint16_t addr, const uint8_t *data, size_t len)
 
 int at24c32_read_bytes(uint16_t addr, uint8_t *data, size_t len)
 {
-    if (addr > AT24C32_MAX_ADDR || !data || len == 0 || (addr + len - 1) > AT24C32_MAX_ADDR)
+    if (addr > AT24C32_MAX_ADDR || !data || len == 0)
+    {
+        return -EINVAL;
+    }
+    if ((uint32_t)addr + len - 1 > AT24C32_MAX_ADDR)
     {
         return -EINVAL;
     }
@@ -155,7 +163,6 @@ int at24c32_read_bytes(uint16_t addr, uint8_t *data, size_t len)
     {
         LOG_ERR("Read bytes failed at 0x%04X (%d)", addr, ret);
     }
-
     return ret;
 }
 
@@ -166,7 +173,12 @@ int at24c32_write_string(uint16_t addr, const char *str)
         return -EINVAL;
     }
 
-    size_t len = strlen(str) + 1;
+    size_t len = strlen(str) + 1; /* include NUL */
+    if (addr > AT24C32_MAX_ADDR || (uint32_t)addr + len - 1 > AT24C32_MAX_ADDR)
+    {
+        return -EINVAL;
+    }
+
     uint16_t current_addr = addr;
     size_t remaining = len;
 
@@ -176,7 +188,8 @@ int at24c32_write_string(uint16_t addr, const char *str)
         size_t bytes_in_page = AT24C32_PAGE_SIZE - page_offset;
         size_t write_len = (remaining < bytes_in_page) ? remaining : bytes_in_page;
 
-        int ret = at24c32_write_page(current_addr, (uint8_t *)(str + (len - remaining)), write_len);
+        int ret = at24c32_write_page(current_addr,
+                                     (const uint8_t *)(str + (len - remaining)), write_len);
         if (ret)
         {
             return ret;
@@ -195,14 +208,49 @@ int at24c32_read_string(uint16_t addr, char *str, size_t max_len)
     {
         return -EINVAL;
     }
-
-    int ret = at24c32_read_bytes(addr, (uint8_t *)str, max_len - 1);
-    if (ret)
+    if (addr > AT24C32_MAX_ADDR)
     {
-        return ret;
+        return -EINVAL;
     }
 
-    str[max_len - 1] = '\0'; // Ensure null termination
+    /* Read in chunks until NUL or buffer limit. */
+    size_t remaining = max_len - 1; /* leave space for terminator */
+    size_t total = 0;
+    uint16_t cur = addr;
+
+    while (remaining > 0 && cur <= AT24C32_MAX_ADDR)
+    {
+        size_t chunk = remaining;
+        /* Clamp chunk to end of device */
+        if ((uint32_t)cur + chunk - 1 > AT24C32_MAX_ADDR)
+        {
+            chunk = AT24C32_MAX_ADDR - cur + 1;
+            if (chunk == 0)
+                break;
+        }
+
+        int rc = at24c32_read_bytes(cur, (uint8_t *)str + total, chunk);
+        if (rc)
+        {
+            return rc;
+        }
+
+        /* Scan for NUL in this chunk */
+        for (size_t i = 0; i < chunk; i++)
+        {
+            if (str[total + i] == '\0')
+            {
+                return 0; /* done */
+            }
+        }
+
+        cur += chunk;
+        total += chunk;
+        remaining -= chunk;
+    }
+
+    /* Force-terminate if no NUL encountered in max_len-1 bytes */
+    str[total] = '\0';
     return 0;
 }
 
@@ -213,6 +261,7 @@ int at24c32_clear_page(uint16_t page_num)
         return -EINVAL;
     }
 
+    /* NOTE: "clear" means program all zeros. 24xx EEPROMs have no erase to 0xFF. */
     uint8_t zeros[AT24C32_PAGE_SIZE];
     memset(zeros, 0, sizeof(zeros));
 
