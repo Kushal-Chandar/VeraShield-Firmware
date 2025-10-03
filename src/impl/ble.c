@@ -15,11 +15,12 @@
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/logging/log.h>
 
+#include "statistic.h"
+#include "pcf8563.h"
 #include "ble.h"
 #include "cycle.h"
 #include "slider.h"
-#include "manual_spray.h"
-#include "pcf8563.h"
+#include "spray.h"
 
 LOG_MODULE_REGISTER(BLE, LOG_LEVEL_INF);
 
@@ -85,13 +86,47 @@ static ssize_t schedule_read(struct bt_conn *conn, const struct bt_gatt_attr *at
     return bt_gatt_attr_read(conn, attr, buf, len, offset, sched_example, sizeof(sched_example));
 }
 
-static ssize_t statistics_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+static ssize_t statistics_read(struct bt_conn *conn,
+                               const struct bt_gatt_attr *attr,
                                void *buf, uint16_t len, uint16_t offset)
 {
-    static const uint8_t stats_example[] = {0x10, 0x00};
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, stats_example, sizeof(stats_example));
-}
+    uint16_t count = 0;
+    uint8_t state = 0;
+    struct tm ts;
 
+    int rc = statistic_load(&count, &state, &ts);
+    if (rc == -ENOENT)
+    {
+        LOG_WRN("Statistics not initialized yet");
+        return BT_GATT_ERR(BT_ATT_ERR_READ_NOT_PERMITTED);
+    }
+    if (rc)
+    {
+        LOG_ERR("statistic_load rc=%d", rc);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    uint8_t payload[STAT_LEN_BYTES];
+    uint16_t meta = stat_pack(count, state);
+
+    payload[0] = (uint8_t)(meta >> 8);
+    payload[1] = (uint8_t)(meta & 0xFF);
+    payload[2] = (uint8_t)ts.tm_sec;
+    payload[3] = (uint8_t)ts.tm_min;
+    payload[4] = (uint8_t)ts.tm_hour;
+    payload[5] = (uint8_t)ts.tm_mday;
+    payload[6] = (uint8_t)ts.tm_wday;
+    payload[7] = (uint8_t)ts.tm_mon;
+    payload[8] = (uint8_t)(ts.tm_year - 100);
+
+    LOG_INF("Statistics read: count=%u, state=%u", count, state);
+    LOG_INF("Timestamp: %04d-%02d-%02d %02d:%02d:%02d (wday=%d)",
+            ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday,
+            ts.tm_hour, ts.tm_min, ts.tm_sec, ts.tm_wday);
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset,
+                             payload, sizeof(payload));
+}
 static ssize_t schedule_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                               const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {

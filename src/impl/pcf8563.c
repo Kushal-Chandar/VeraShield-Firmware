@@ -205,3 +205,15 @@ int pcf8563_set_alarm_hm(struct pcf8563 *dev, int hour, int minute)
     (void)pcf8563_alarm_clear_flag(dev);
     return pcf8563_alarm_irq_enable(dev, true);
 }
+
+bool tm_sane(const struct tm *t)
+{
+    int y = t->tm_year + 1900;
+    return (y >= 2000 && y <= 2099) &&
+           (t->tm_mon >= 0 && t->tm_mon < 12) &&
+           (t->tm_mday >= 1 && t->tm_mday <= 31) &&
+           (t->tm_hour >= 0 && t->tm_hour < 24) &&
+           (t->tm_min >= 0 && t->tm_min < 60) &&
+           (t->tm_sec >= 0 && t->tm_sec < 60);
+}
+

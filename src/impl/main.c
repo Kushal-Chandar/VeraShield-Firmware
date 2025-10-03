@@ -8,7 +8,7 @@
 #include "ble.h"
 #include "cycle.h"
 #include "vbat.h"
-#include "manual_spray.h"
+#include "spray.h"
 #include "slider.h"
 #include "pcf8563.h"
 
@@ -20,6 +20,32 @@ static struct pcf8563 rtc = {
     .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
     .int_gpio = GPIO_DT_SPEC_GET(PCF8563_NODE, int_gpios),
 };
+
+static void seed_time_from_build_if_needed(void)
+{
+    struct tm now;
+    if (pcf8563_get_time(&rtc, &now) == 0 && tm_sane(&now))
+        return;
+
+    static const char *mons = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    char m[4] = {0};
+    int d, y, H, M, S;
+    if (sscanf(__DATE__, "%3s %d %d", m, &d, &y) != 3)
+        return;
+    if (sscanf(__TIME__, "%d:%d:%d", &H, &M, &S) != 3)
+        return;
+    const char *p = strstr(mons, m);
+    int mon = p ? (int)((p - mons) / 3) : 0;
+
+    struct tm t = {
+        .tm_sec = S, .tm_min = M, .tm_hour = H, .tm_mday = d, .tm_mon = mon, .tm_year = y - 1900, .tm_isdst = -1};
+    if (pcf8563_set_time(&rtc, &t) == 0)
+    {
+        LOG_INF("RTC seeded: %04d-%02d-%02d %02d:%02d:%02d",
+                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                t.tm_hour, t.tm_min, t.tm_sec);
+    }
+}
 
 static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
     (BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY),
@@ -135,9 +161,10 @@ int main(void)
     if (!device_is_ready(rtc.i2c.bus))
     {
         printk("I2C bus not ready\n");
-        return;
+        return -1;
     }
     pcf8563_bind(&rtc);
+    seed_time_from_build_if_needed();
 
     cycle_init();
     cycle_tick_start();
@@ -148,9 +175,9 @@ int main(void)
         vbat_start();
     if (slider_init() != 0)
         LOG_ERR("slider_init failed");
-    if (manual_spray_init() != 0)
-        LOG_ERR("manual_spray_init failed");
-    manual_spray_callback();
+    if (spray_init() != 0)
+        LOG_ERR("spray_init failed");
+    spray_callback();
 
     err = bt_enable(NULL);
     if (err)
@@ -171,13 +198,6 @@ int main(void)
         if (is_connected)
         {
             gpio_pin_set_dt(&status_led, 1);
-            struct tm now;
-            if (pcf8563_get_time(&rtc, &now) == 0)
-            {
-                LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d",
-                        now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
-                        now.tm_hour, now.tm_min, now.tm_sec);
-            }
             k_sleep(K_MSEC(500));
         }
         else if (is_advertising)
@@ -192,4 +212,6 @@ int main(void)
             k_sleep(K_MSEC(500));
         }
     }
+
+    return 0;
 }

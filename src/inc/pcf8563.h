@@ -33,5 +33,6 @@ int pcf8563_set_time(struct pcf8563 *dev, const struct tm *t_in);
 int pcf8563_set_alarm_hm(struct pcf8563 *dev, int hour, int minute);
 int pcf8563_alarm_irq_enable(struct pcf8563 *dev, bool enable);
 int pcf8563_alarm_clear_flag(struct pcf8563 *dev);
+bool tm_sane(const struct tm *t);
 
 #endif

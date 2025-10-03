@@ -8,5 +8,6 @@ target_sources(app PRIVATE
   cycle.c
   vbat.c
   slider.c
-  manual_spray.c
+  spray.c
+  statistic.c
 )

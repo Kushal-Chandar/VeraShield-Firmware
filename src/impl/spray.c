@@ -4,12 +4,14 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 
-#include "manual_spray.h"
+#include "spray.h"
 #include "cycle.h"
 #include "slider.h"
 #include "led_ctrl.h"
+#include "statistic.h"
+#include "pcf8563.h"
 
-LOG_MODULE_REGISTER(MANUAL_SPRAY, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(SPRAY, LOG_LEVEL_INF);
 
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SP_SW_NODE, gpios);
 static struct gpio_callback button_cb_data;
@@ -52,16 +54,17 @@ static void start_cycle_work_handler(struct k_work *work)
 {
     struct cycle_work *cw = CONTAINER_OF(work, struct cycle_work, work);
 
-    struct cycle_cfg_t cfg_used;
+    /* Read slider once: use for config (if needed) + persisted state */
+    int mv = slider_read_millivolts();
+    int slider_state = slider_classify_from_mv(mv);
 
+    struct cycle_cfg_t cfg_used;
     if (cw->has_cfg)
     {
         cfg_used = cw->s_cfg;
     }
     else
     {
-        int mv = slider_read_millivolts();
-        int slider_state = slider_classify_from_mv(mv);
         slider_state_to_cycle_cfg(slider_state, &cfg_used);
     }
 
@@ -69,6 +72,30 @@ static void start_cycle_work_handler(struct k_work *work)
 
     LOG_INF("Configured cycle: spray=%dms, idle=%dms, repeats=%d",
             cfg_used.spray_ms, cfg_used.idle_ms, cfg_used.repeats);
+
+    /* Persist: increment count + store slider_state + RTC time (all-or-nothing) */
+    {
+        struct pcf8563 *rtc = pcf8563_get();
+        int rc = statistic_increment_with_rtc(rtc, (uint8_t)slider_state);
+        if (rc)
+        {
+            LOG_WRN("statistic write failed: %d", rc);
+        }
+        else
+        {
+            /* Optional: quick read-back for trace */
+            uint16_t cnt;
+            uint8_t st;
+            struct tm ts;
+            if (!statistic_load(&cnt, &st, &ts))
+            {
+                LOG_INF("stats: count=%u, state=%u, %04d-%02d-%02d %02d:%02d:%02d",
+                        cnt, st,
+                        ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday,
+                        ts.tm_hour, ts.tm_min, ts.tm_sec);
+            }
+        }
+    }
 
     cycle_start();
 
@@ -88,7 +115,7 @@ void spray_action(void)
     phase_context.has_cfg = false;
 
     current_state = STATE_SLOW_BLINK;
-    led_spray_set(true);
+    // led_spray_set(true);
 
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
 
@@ -109,7 +136,7 @@ void spray_action_with_cfg(struct cycle_cfg_t cfg)
     phase_context.has_cfg = true;
 
     current_state = STATE_SLOW_BLINK;
-    led_spray_set(true);
+    // led_spray_set(true);
 
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
 
@@ -142,7 +169,7 @@ static void phase_timer_handler(struct k_timer *timer)
         current_state = STATE_SOLID;
 
         k_timer_stop(&blink_timer);
-        led_spray_set(true);
+        // led_spray_set(true);
 
         k_timer_start(&phase_timer, K_NO_WAIT, K_NO_WAIT);
         break;
@@ -168,7 +195,7 @@ static void blink_timer_handler(struct k_timer *timer)
 {
     if (current_state == STATE_SLOW_BLINK || current_state == STATE_FAST_BLINK)
     {
-        led_spray_toggle();
+        // led_spray_toggle();
     }
 }
 
@@ -184,12 +211,12 @@ static void monitor_timer_handler(struct k_timer *timer)
             LOG_INF("Spray cycle completed");
             current_state = STATE_IDLE;
             k_timer_stop(&monitor_timer);
-            led_spray_set(false);
+            // led_spray_set(false);
             phase_context.has_cfg = false;
         }
         else
         {
-            led_spray_set(true);
+            // led_spray_set(true);
         }
     }
 }
@@ -198,7 +225,7 @@ static void start_spray_cycle(void)
 {
     LOG_INF("Starting spray cycle (auto)");
     current_state = STATE_MONITORING_CYCLE;
-    led_spray_set(true);
+    // led_spray_set(true);
     start_cycle_work.has_cfg = false;
     k_work_submit(&start_cycle_work.work);
 }
@@ -207,7 +234,7 @@ static void start_spray_cycle_with_cfg(struct cycle_cfg_t cfg)
 {
     LOG_INF("Starting spray cycle (custom cfg)");
     current_state = STATE_MONITORING_CYCLE;
-    led_spray_set(true);
+    // led_spray_set(true);
     start_cycle_work.s_cfg = cfg;
     start_cycle_work.has_cfg = true;
     k_work_submit(&start_cycle_work.work);
@@ -224,15 +251,14 @@ bool is_spray_cycle_active(void)
     return false;
 }
 
-void manual_spray_stop(void)
+void spray_stop(void)
 {
     if (current_state == STATE_MONITORING_CYCLE)
     {
-        LOG_INF("Manually stopping spray cycle");
         cycle_stop();
         current_state = STATE_IDLE;
         k_timer_stop(&monitor_timer);
-        led_spray_set(false);
+        // led_spray_set(false);
         phase_context.has_cfg = false;
     }
 
@@ -242,12 +268,12 @@ void manual_spray_stop(void)
         current_state = STATE_IDLE;
         k_timer_stop(&phase_timer);
         k_timer_stop(&blink_timer);
-        led_spray_set(false);
+        // led_spray_set(false);
         phase_context.has_cfg = false;
     }
 }
 
-int manual_spray_init(void)
+int spray_init(void)
 {
     int ret;
 
@@ -276,7 +302,7 @@ int manual_spray_init(void)
     return 0;
 }
 
-int manual_spray_callback(void)
+int spray_callback(void)
 {
     int ret;
 
