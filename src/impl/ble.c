@@ -11,6 +11,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/logging/log.h>
 
@@ -18,6 +19,7 @@
 #include "cycle.h"
 #include "slider.h"
 #include "manual_spray.h"
+#include "pcf8563.h"
 
 LOG_MODULE_REGISTER(BLE, LOG_LEVEL_INF);
 
@@ -25,6 +27,41 @@ void do_shit()
 {
     struct cycle_cfg_t cfg = {.spray_ms = 5000, .idle_ms = 2000, .repeats = 3};
     spray_action_with_cfg(cfg);
+}
+
+static int parse_gadi_time_payload(const uint8_t *buf, uint16_t len, struct tm *out)
+{
+    if (len != 7)
+    {
+        return -EMSGSIZE;
+    }
+
+    const uint8_t sec = buf[0];
+    const uint8_t min = buf[1];
+    const uint8_t hour = buf[2];
+    const uint8_t mday = buf[3];
+    const uint8_t wday = buf[4];  // 0–6, Sunday == 0
+    const uint8_t month = buf[5]; // 1–12
+    const uint8_t year = buf[6];  // 0–99 → 2000–2099
+
+    // Range checks
+    if (sec > 59 || min > 59 || hour > 23 ||
+        mday < 1 || mday > 31 || wday > 6 ||
+        month < 1 || month > 12)
+    {
+        return -ERANGE;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->tm_sec = sec;
+    out->tm_min = min;
+    out->tm_hour = hour;
+    out->tm_mday = mday;
+    out->tm_wday = wday;
+    out->tm_mon = month - 1;   // struct tm: 0–11
+    out->tm_year = 100 + year; // 2000–2099 → tm_year since 1900
+
+    return 0;
 }
 
 // static void on_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -68,6 +105,50 @@ static ssize_t schedule_write(struct bt_conn *conn, const struct bt_gatt_attr *a
     return len;
 }
 
+static ssize_t gadi_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                          const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+    if (offset != 0)
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    if (len == 0)
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+
+    struct tm t;
+    int rc = parse_gadi_time_payload(buf, len, &t);
+    if (rc == -EMSGSIZE)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+    else if (rc == -EBADMSG || rc == -ERANGE)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+    else if (rc)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    struct pcf8563 *rtc = pcf8563_get();
+    if (!rtc)
+    {
+        LOG_ERR("pcf8563_get() returned NULL; not bound yet");
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    rc = pcf8563_set_time(rtc, &t);
+    if (rc)
+    {
+        LOG_ERR("pcf8563_set_time failed: %d", rc);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    LOG_INF("RTC set: %04d-%02d-%02d %02d:%02d:%02d (wday=%d)",
+            2000 + (t.tm_year - 100), t.tm_mon + 1, t.tm_mday,
+            t.tm_hour, t.tm_min, t.tm_sec, t.tm_wday);
+
+    return len; // consumed all bytes
+}
+
 static ssize_t remote_spray_write(struct bt_conn *conn,
                                   const struct bt_gatt_attr *attr,
                                   const void *buf, uint16_t len,
@@ -89,6 +170,10 @@ static ssize_t remote_spray_write(struct bt_conn *conn,
 BT_GATT_SERVICE_DEFINE(
     machhar_svc,
     BT_GATT_PRIMARY_SERVICE(BT_UUID_MACHHAR_SERVICE),
+    BT_GATT_CHARACTERISTIC(BT_UUID_MACHHAR_GADI_SYNC,
+                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+                           BT_GATT_PERM_WRITE,
+                           NULL, gadi_write, NULL),
     BT_GATT_CHARACTERISTIC(BT_UUID_MACHHAR_SCHEDULING,
                            BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
                            BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,

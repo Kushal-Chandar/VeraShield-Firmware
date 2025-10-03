@@ -10,8 +10,16 @@
 #include "vbat.h"
 #include "manual_spray.h"
 #include "slider.h"
+#include "pcf8563.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
+
+#define PCF8563_NODE DT_NODELABEL(pcf8563) // or DT_ALIAS(pcf8563)
+
+static struct pcf8563 rtc = {
+    .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
+    .int_gpio = GPIO_DT_SPEC_GET(PCF8563_NODE, int_gpios),
+};
 
 static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
     (BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY),
@@ -124,6 +132,12 @@ int main(void)
         LOG_ERR("LED config err %d", err);
         return -1;
     }
+    if (!device_is_ready(rtc.i2c.bus))
+    {
+        printk("I2C bus not ready\n");
+        return;
+    }
+    pcf8563_bind(&rtc);
 
     cycle_init();
     cycle_tick_start();
@@ -157,6 +171,13 @@ int main(void)
         if (is_connected)
         {
             gpio_pin_set_dt(&status_led, 1);
+            struct tm now;
+            if (pcf8563_get_time(&rtc, &now) == 0)
+            {
+                LOG_INF("Now %04d-%02d-%02d %02d:%02d:%02d",
+                        now.tm_year + 1900, now.tm_mon + 1, now.tm_mday,
+                        now.tm_hour, now.tm_min, now.tm_sec);
+            }
             k_sleep(K_MSEC(500));
         }
         else if (is_advertising)

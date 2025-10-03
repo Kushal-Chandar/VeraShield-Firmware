@@ -31,6 +31,7 @@ static bool led_on = false;
 #define VBAT_RED_MV 1500    // Low battery level
 
 #define ADC_SAMPLE_INTERVAL_MS (5 * 60 * 1000)
+// #define ADC_SAMPLE_INTERVAL_MS (5 * 1000)
 
 static uint8_t voltage_to_percent(int mv)
 {

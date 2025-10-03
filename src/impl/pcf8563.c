@@ -76,6 +76,10 @@ static void pcf8563_isr(const struct device *port, struct gpio_callback *cb, uin
 }
 
 /* Public API */
+static struct pcf8563 *g_dev;
+void pcf8563_bind(struct pcf8563 *dev) { g_dev = dev; }
+struct pcf8563 *pcf8563_get(void) { return g_dev; }
+
 int pcf8563_alarm_clear_flag(struct pcf8563 *dev)
 {
     uint8_t c2;

@@ -20,6 +20,9 @@ struct pcf8563
     void *alarm_user;
 };
 
+void pcf8563_bind(struct pcf8563 *dev);
+struct pcf8563 *pcf8563_get(void);
+
 int pcf8563_init(struct pcf8563 *dev);
 void pcf8563_set_alarm_callback(struct pcf8563 *dev,
                                 void (*cb)(void *user), void *user);
