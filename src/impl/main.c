@@ -1,180 +1,174 @@
-/* main.c — quick test app for AT24C32 driver */
-
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include "led_ctrl.h"
-#include "at24c32.h"
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/gap.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/drivers/gpio.h>
+#include "ble.h"
+#include "cycle.h"
+#include "vbat.h"
+#include "manual_spray.h"
+#include "slider.h"
 
-/* simple assert-like macro that prints and bails on failure */
-#define CHECK_OK(expr)                                  \
-    do                                                  \
-    {                                                   \
-        int __rc = (expr);                              \
-        if (__rc != 0)                                  \
-        {                                               \
-            printk("FAIL: %s -> rc=%d\n", #expr, __rc); \
-            goto out;                                   \
-        }                                               \
-        else                                            \
-        {                                               \
-            printk("OK  : %s\n", #expr);                \
-        }                                               \
-    } while (0)
+LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
-void main(void)
+static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
+    (BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY),
+    800, 801, NULL);
+
+#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
+#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
+
+static const struct gpio_dt_spec status_led =
+    GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0});
+
+#define RUN_LED_BLINK_INTERVAL 1000
+
+static const struct bt_data ad[] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
+};
+
+static const struct bt_data sd[] = {
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_MACHHAR_SERVICE_VAL),
+};
+
+static bool is_connected = false;
+static bool is_advertising = false;
+
+static struct k_work adv_work;
+static struct k_work_delayable adv_stop_work;
+
+static void advertising_start(void);
+
+static void adv_stop_work_handler(struct k_work *work)
 {
-    int ret = led_ctrl_init();
-    if (ret)
+    int err = bt_le_adv_stop();
+    if (err && err != -EALREADY)
     {
-        LOG_ERR("led_ctrl_init failed (%d)", ret);
+        LOG_ERR("bt_le_adv_stop err %d", err);
         return;
     }
+    is_advertising = false;
+    LOG_INF("Advertising stopped (timeout)");
+}
 
-    /* Enable outputs (OE active-low => drives pin low) */
-    led_ctrl_enable(true);
-    LOG_INF("LED controller initialized and outputs enabled");
-
-    /* Walk through each defined LED */
-    led_id_t leds[] = {LED_RED, LED_GREEN, LED_BLUE, LED_BLT, LED_PW, LED_SPR};
-    size_t count = ARRAY_SIZE(leds);
-
-    for (size_t i = 0; i < count; i++)
+static void adv_work_handler(struct k_work *work)
+{
+    int err = bt_le_adv_start(adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    if (err)
     {
-        LOG_INF("Lighting LED %d", leds[i]);
-        led_ctrl_set(leds[i], true);
-        k_msleep(1000);
-        led_ctrl_set(leds[i], false);
+        LOG_ERR("bt_le_adv_start err %d", err);
+        return;
+    }
+    is_advertising = true;
+    LOG_INF("Advertising started");
+    k_work_schedule(&adv_stop_work, K_MINUTES(2));
+}
+
+static void on_connected(struct bt_conn *conn, uint8_t err)
+{
+    if (err)
+    {
+        LOG_ERR("Connection failed (err %u)", err);
+        return;
+    }
+    is_connected = true;
+    is_advertising = false;
+    k_work_cancel_delayable(&adv_stop_work);
+    gpio_pin_set_dt(&status_led, 1);
+    LOG_INF("Connected");
+}
+
+static void on_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    LOG_INF("Disconnected (reason %u)", reason);
+    is_connected = false;
+    if (!is_advertising)
+    {
+        advertising_start(); /* restart for another 2 minutes */
+    }
+}
+
+static void recycled_cb(void)
+{
+    // Now device needs to restart for advertising again
+}
+
+static struct bt_conn_cb connection_callbacks = {
+    .connected = on_connected,
+    .disconnected = on_disconnected,
+    .recycled = recycled_cb,
+};
+
+static void advertising_start(void)
+{
+    k_work_submit(&adv_work);
+}
+
+int main(void)
+{
+    int err;
+
+    LOG_INF("Starting BLE + status LED");
+
+    if (!device_is_ready(status_led.port))
+    {
+        LOG_ERR("status_led port not ready");
+        return -1;
+    }
+    err = gpio_pin_configure_dt(&status_led, GPIO_OUTPUT_INACTIVE);
+    if (err)
+    {
+        LOG_ERR("LED config err %d", err);
+        return -1;
     }
 
-    /* Toggle all LEDs forever */
+    cycle_init();
+    cycle_tick_start();
+    struct cycle_cfg_t init = {.spray_ms = 2000, .idle_ms = 3000, .repeats = 0};
+    cycle_set_cfg(&init);
+
+    if (vbat_init() == 0)
+        vbat_start();
+    if (slider_init() != 0)
+        LOG_ERR("slider_init failed");
+    if (manual_spray_init() != 0)
+        LOG_ERR("manual_spray_init failed");
+    manual_spray_callback();
+
+    err = bt_enable(NULL);
+    if (err)
+    {
+        LOG_ERR("Bluetooth init err %d", err);
+        return -1;
+    }
+    bt_conn_cb_register(&connection_callbacks);
+    LOG_INF("Bluetooth initialized");
+
+    k_work_init(&adv_work, adv_work_handler);
+    k_work_init_delayable(&adv_stop_work, adv_stop_work_handler);
+    advertising_start();
+
+    bool led_on = false;
     while (1)
     {
-        LOG_INF("Toggling all LEDs");
-        for (size_t i = 0; i < count; i++)
+        if (is_connected)
         {
-            led_ctrl_toggle(leds[i]);
+            gpio_pin_set_dt(&status_led, 1);
+            k_sleep(K_MSEC(500));
         }
-        k_msleep(1000);
-    }
-
-    /* 3) Page write/read (aligned) */
-    {
-        const uint16_t page_num = 10;
-        const uint16_t page_base = page_num * AT24C32_PAGE_SIZE;
-        uint8_t wr[AT24C32_PAGE_SIZE];
-        uint8_t rd[AT24C32_PAGE_SIZE];
-
-        for (size_t i = 0; i < sizeof(wr); i++)
+        else if (is_advertising)
         {
-            wr[i] = (uint8_t)i; /* simple 0..31 pattern */
-        }
-
-        printk("\n[page R/W] page=%u base=0x%04X len=%u\n",
-               page_num, page_base, (unsigned)sizeof(wr));
-        CHECK_OK(at24c32_write_page(page_base, wr, sizeof(wr)));
-        k_msleep(AT24C32_WRITE_DELAY_MS);
-        memset(rd, 0, sizeof(rd));
-        CHECK_OK(at24c32_read_bytes(page_base, rd, sizeof(rd)));
-
-        if (memcmp(wr, rd, sizeof(wr)) != 0)
-        {
-            printk("Page data mismatch!\nWR: ");
-            dump_hex(wr, sizeof(wr));
-            printk("RD: ");
-            dump_hex(rd, sizeof(rd));
-            goto out;
+            led_on = !led_on;
+            gpio_pin_set_dt(&status_led, led_on);
+            k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
         }
         else
         {
-            printk("[page R/W] verify ✓\n");
+            gpio_pin_set_dt(&status_led, 0);
+            k_sleep(K_MSEC(500));
         }
     }
-
-    /* 4) String write/read (C-string, includes terminator if driver does that) */
-    {
-        const uint16_t str_addr = 0x0200;
-        const char *msg = "hello from zephyr+AT24C32";
-        char buf[64];
-
-        printk("\n[string R/W] addr=0x%04X write=\"%s\"\n", str_addr, msg);
-        CHECK_OK(at24c32_write_string(str_addr, msg));
-        k_msleep(AT24C32_WRITE_DELAY_MS);
-        memset(buf, 0, sizeof(buf));
-        CHECK_OK(at24c32_read_string(str_addr, buf, sizeof(buf)));
-        printk("[string R/W] read back=\"%s\"\n", buf);
-
-        if (strncmp(msg, buf, strlen(msg)) != 0)
-        {
-            printk("String mismatch!\n");
-            goto out;
-        }
-        else
-        {
-            printk("[string R/W] verify ✓\n");
-        }
-    }
-
-    /* 5) "Clear" page by filling with 0x00 and verifying */
-    {
-        const uint16_t page_to_clear = 11;
-        const uint16_t base = page_to_clear * AT24C32_PAGE_SIZE;
-        uint8_t rd[AT24C32_PAGE_SIZE];
-
-        printk("\n[clear page] page=%u (fill with 0x00)\n", page_to_clear);
-        CHECK_OK(at24c32_clear_page(page_to_clear)); /* writes 0x00 over the page */
-        CHECK_OK(at24c32_is_ready());
-        CHECK_OK(at24c32_read_bytes(base, rd, sizeof(rd)));
-
-        bool all_00 = true;
-        for (size_t i = 0; i < sizeof(rd); i++)
-        {
-            if (rd[i] != 0x00)
-            {
-                all_00 = false;
-                break;
-            }
-        }
-        printk("[clear page] verify %s\n", all_00 ? "✓ (all 0x00)" : "✗");
-        if (!all_00)
-        {
-            printk("Page not filled to 0x00\n");
-            goto out;
-        }
-    }
-
-    /* 6) Boundary test: last byte */
-    {
-        const uint16_t last_addr = AT24C32_MAX_ADDR;
-        uint8_t out = 0x3C, in = 0;
-        printk("\n[boundary] last byte addr=0x%04X\n", last_addr);
-        CHECK_OK(at24c32_write_byte(last_addr, out));
-        k_msleep(AT24C32_WRITE_DELAY_MS);
-        CHECK_OK(at24c32_read_byte(last_addr, &in));
-        printk("[boundary] read back=0x%02X %s\n", in, (in == out) ? "✓" : "✗");
-        if (in != out)
-        {
-            goto out;
-        }
-    }
-
-    /* 7) Guarded negative test: attempt to read beyond end (expect error) */
-    {
-        uint8_t rd[8];
-        uint16_t near_end = AT24C32_MAX_ADDR - 3; /* 4092 */
-        printk("\n[negative] read 8 bytes starting 0x%04X (should fail)\n", near_end);
-        int rc = at24c32_read_bytes(near_end, rd, sizeof(rd));
-        if (rc == 0)
-        {
-            printk("Unexpected success reading past end! Driver should bound-check.\n");
-            /* not fatal to the rest of tests, just warn */
-        }
-        else
-        {
-            printk("Got expected error rc=%d ✓\n", rc);
-        }
-    }
-
-    printk("\n=== All tests completed ===\n");
-out:
-    return;
 }
