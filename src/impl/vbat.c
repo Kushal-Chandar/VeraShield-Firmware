@@ -15,47 +15,38 @@ static const struct adc_dt_spec adc_vbat =
 /* LED: alias led3 */
 static const struct gpio_dt_spec led3 = GPIO_DT_SPEC_GET(DT_ALIAS(led3), gpios);
 
-/* Work queues */
-static struct k_work_delayable blink_work;  // For LED blinking
-static struct k_work_delayable sample_work; // For ADC sampling every 5 minutes
+static struct k_work_delayable blink_work;
+static struct k_work_delayable sample_work;
 
-/* Global variables */
-static volatile int last_mv = -1;            // Last measured voltage in millivolts
-static volatile uint8_t battery_percent = 0; // Battery percentage for BAS
-static uint32_t blink_period_ms = 1000;      // LED blink period
-static bool running = false;                 // System running state
-static bool led_on = false;                  // Current LED state
+static volatile int last_mv = -1;
+static volatile uint8_t battery_percent = 0;
+static uint32_t blink_period_ms = 1000;
+static bool running = false;
+static bool led_on = false;
 
-/* Battery level thresholds - adjust these for your battery */
 #define VBAT_FULL_MV 3300   // 100% battery level
 #define VBAT_EMPTY_MV 2000  // 0% battery level
 #define VBAT_GREEN_MV 2600  // Good battery level
 #define VBAT_YELLOW_MV 2000 // Medium battery level
 #define VBAT_RED_MV 1500    // Low battery level
 
-/* ADC sampling interval - 5 minutes */
 #define ADC_SAMPLE_INTERVAL_MS (5 * 60 * 1000)
 
-/**
- * Convert voltage to battery percentage for BAS
- * Maps voltage between VBAT_EMPTY_MV and VBAT_FULL_MV to 0-100%
- */
 static uint8_t voltage_to_percent(int mv)
 {
     if (mv <= VBAT_EMPTY_MV)
     {
-        return 0; // 0% if voltage is at or below empty level
+        return 0;
     }
     if (mv >= VBAT_FULL_MV)
     {
-        return 100; // 100% if voltage is at or above full level
+        return 100;
     }
 
     // Linear interpolation between empty and full
-    // Formula: percent = (current_voltage - empty_voltage) * 100 / (full_voltage - empty_voltage)
-    int range = VBAT_FULL_MV - VBAT_EMPTY_MV; // Total voltage range
-    int value = mv - VBAT_EMPTY_MV;           // Current position in range
-    return (uint8_t)((value * 100) / range);  // Convert to percentage
+    int range = VBAT_FULL_MV - VBAT_EMPTY_MV;
+    int value = mv - VBAT_EMPTY_MV;
+    return (uint8_t)((value * 100) / range);
 }
 
 /**

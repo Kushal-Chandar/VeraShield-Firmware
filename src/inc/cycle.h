@@ -1,18 +1,13 @@
 #pragma once
 #include <stdint.h>
 
-/*
- * Cycle configuration: fixed servo angles.
- * Only durations and repeat count are configurable.
- */
 struct cycle_cfg_t
 {
-    uint16_t spray_ms; /* spray duration in ms */
-    uint16_t idle_ms;  /* idle duration in ms */
-    uint16_t repeats;  /* number of Spray->Idle cycles; 0 = infinite */
+    uint16_t spray_ms;
+    uint16_t idle_ms;
+    uint16_t repeats;
 };
 
-/* Runtime state */
 struct cycle_state_t
 {
     uint8_t phase;         /* 0 Stopped, 1 Spray, 2 Idle, 3 Paused */
