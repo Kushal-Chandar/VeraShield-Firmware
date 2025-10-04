@@ -33,36 +33,11 @@ void do_shit()
 static int parse_gadi_time_payload(const uint8_t *buf, uint16_t len, struct tm *out)
 {
     if (len != 7)
-    {
         return -EMSGSIZE;
-    }
-
-    const uint8_t sec = buf[0];
-    const uint8_t min = buf[1];
-    const uint8_t hour = buf[2];
-    const uint8_t mday = buf[3];
-    const uint8_t wday = buf[4];  // 0–6, Sunday == 0
-    const uint8_t month = buf[5]; // 1–12
-    const uint8_t year = buf[6];  // 0–99 → 2000–2099
-
-    // Range checks
-    if (sec > 59 || min > 59 || hour > 23 ||
-        mday < 1 || mday > 31 || wday > 6 ||
-        month < 1 || month > 12)
-    {
-        return -ERANGE;
-    }
-
-    memset(out, 0, sizeof(*out));
-    out->tm_sec = sec;
-    out->tm_min = min;
-    out->tm_hour = hour;
-    out->tm_mday = mday;
-    out->tm_wday = wday;
-    out->tm_mon = month - 1;   // struct tm: 0–11
-    out->tm_year = 100 + year; // 2000–2099 → tm_year since 1900
-
-    return 0;
+    tm_from_7(out, buf); // Note: Please send month from 0 to 11
+    char tsbuf[100];
+    LOG_INF("RTC: %s", tm_to_str(out, tsbuf, sizeof(tsbuf)));
+    return tm_sane(out) ? 0 : -ERANGE;
 }
 
 // static void on_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -120,9 +95,8 @@ static ssize_t statistics_read(struct bt_conn *conn,
     payload[8] = (uint8_t)(ts.tm_year - 100);
 
     LOG_INF("Statistics read: count=%u, state=%u", count, state);
-    LOG_INF("Timestamp: %04d-%02d-%02d %02d:%02d:%02d (wday=%d)",
-            ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday,
-            ts.tm_hour, ts.tm_min, ts.tm_sec, ts.tm_wday);
+    char tsbuf[100];
+    LOG_INF("RTC: %s", tm_to_str(&ts, tsbuf, sizeof(tsbuf)));
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset,
                              payload, sizeof(payload));
@@ -177,9 +151,8 @@ static ssize_t gadi_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
 
-    LOG_INF("RTC set: %04d-%02d-%02d %02d:%02d:%02d (wday=%d)",
-            2000 + (t.tm_year - 100), t.tm_mon + 1, t.tm_mday,
-            t.tm_hour, t.tm_min, t.tm_sec, t.tm_wday);
+    char tsbuf[100];
+    LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
 
     return len; // consumed all bytes
 }

@@ -56,15 +56,10 @@ static void pcf8563_work_handler(struct k_work *work)
     struct pcf8563_work_ctx *ctx = CONTAINER_OF(work, struct pcf8563_work_ctx, work);
     struct pcf8563 *dev = ctx->dev;
 
-    /* Clear AF/TF in thread context so INT releases */
-    (void)rd(dev, REG_CTRL2, (uint8_t[1]){0}, 0); /* no-op read to satisfy static analysis */
     (void)pcf8563_alarm_clear_flag(dev);
 
-    /* Call user callback */
     if (dev->alarm_cb)
-    {
         dev->alarm_cb(dev->alarm_user);
-    }
 }
 
 /* ISR: DO NOT touch I2C here. Just schedule work. */
@@ -158,6 +153,7 @@ void pcf8563_set_alarm_callback(struct pcf8563 *dev,
     dev->alarm_user = user;
 }
 
+// Note we are ignoring century flag because we will never be dealing with pre 2000 times
 int pcf8563_get_time(struct pcf8563 *dev, struct tm *t)
 {
     uint8_t b[7];
@@ -185,23 +181,27 @@ int pcf8563_set_time(struct pcf8563 *dev, const struct tm *t)
     b[3] = bin2bcd((uint8_t)t->tm_mday) & 0x3F;
     b[4] = bin2bcd((uint8_t)t->tm_wday) & 0x07;
     b[5] = bin2bcd((uint8_t)(t->tm_mon + 1)) & 0x1F;
-    b[6] = bin2bcd((uint8_t)((t->tm_year + 1900) % 100));
+    b[6] = bin2bcd((uint8_t)((t->tm_year) % 100));
     return wr(dev, REG_SECONDS, b, sizeof(b));
 }
 
 int pcf8563_set_alarm_hm(struct pcf8563 *dev, int hour, int minute)
 {
-    /* AE bit (bit7) = 1 means ignore field */
+    if ((hour >= 0 && (hour < 0 || hour > 23)) ||
+        (minute >= 0 && (minute < 0 || minute > 59)))
+    {
+        return -EINVAL;
+    }
+
     uint8_t a_min = (minute >= 0) ? (bin2bcd((uint8_t)minute) & 0x7F) : 0x80;
     uint8_t a_hour = (hour >= 0) ? (bin2bcd((uint8_t)hour) & 0x3F) : 0x80;
-    uint8_t a_day = 0x80;  /* ignore */
-    uint8_t a_wday = 0x80; /* ignore */
+    uint8_t a_day = 0x80;
+    uint8_t a_wday = 0x80;
 
     int rc = wr(dev, REG_MINUTE_ALARM, (uint8_t[]){a_min, a_hour, a_day, a_wday}, 4);
     if (rc)
         return rc;
 
-    /* Clear AF, then enable AIE so INT can assert on match */
     (void)pcf8563_alarm_clear_flag(dev);
     return pcf8563_alarm_irq_enable(dev, true);
 }
@@ -217,3 +217,25 @@ bool tm_sane(const struct tm *t)
            (t->tm_sec >= 0 && t->tm_sec < 60);
 }
 
+void tm_to_7(const struct tm *t, uint8_t out[7])
+{
+    out[0] = (uint8_t)t->tm_sec;
+    out[1] = (uint8_t)t->tm_min;
+    out[2] = (uint8_t)t->tm_hour;
+    out[3] = (uint8_t)t->tm_mday;
+    out[4] = (uint8_t)t->tm_wday;
+    out[5] = (uint8_t)t->tm_mon;    /* 0..11 */
+    out[6] = (uint8_t)(t->tm_year); /* years since 2000 */
+}
+
+void tm_from_7(struct tm *t, const uint8_t in[7])
+{
+    memset(t, 0, sizeof(*t));
+    t->tm_sec = in[0];
+    t->tm_min = in[1];
+    t->tm_hour = in[2];
+    t->tm_mday = in[3];
+    t->tm_wday = in[4];
+    t->tm_mon = in[5];  /* 0..11 */
+    t->tm_year = in[6]; /* years since 1900 */
+}

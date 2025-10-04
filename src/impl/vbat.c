@@ -13,7 +13,7 @@ static const struct adc_dt_spec adc_vbat =
     ADC_DT_SPEC_GET_BY_NAME(DT_PATH(zephyr_user), vbat);
 
 /* LED: alias led3 */
-static const struct gpio_dt_spec led3 = GPIO_DT_SPEC_GET(DT_ALIAS(led3), gpios);
+static const struct gpio_dt_spec led3 = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
 
 static struct k_work_delayable blink_work;
 static struct k_work_delayable sample_work;

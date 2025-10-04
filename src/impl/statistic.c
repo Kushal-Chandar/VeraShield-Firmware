@@ -4,32 +4,6 @@
 #include <string.h>
 #include <errno.h>
 
-/* ---- internal helpers for compact 7-byte time ---- */
-static inline void tm_to_7(const struct tm *t, uint8_t out[7])
-{
-    out[0] = (uint8_t)t->tm_sec;
-    out[1] = (uint8_t)t->tm_min;
-    out[2] = (uint8_t)t->tm_hour;
-    out[3] = (uint8_t)t->tm_mday;
-    out[4] = (uint8_t)t->tm_wday;
-    out[5] = (uint8_t)t->tm_mon;          /* 0..11 */
-    out[6] = (uint8_t)(t->tm_year - 100); /* years since 2000 */
-}
-
-static inline void tm_from_7(struct tm *t, const uint8_t in[7])
-{
-    memset(t, 0, sizeof(*t));
-    t->tm_sec = in[0];
-    t->tm_min = in[1];
-    t->tm_hour = in[2];
-    t->tm_mday = in[3];
-    t->tm_wday = in[4];
-    t->tm_mon = in[5];        /* 0..11 */
-    t->tm_year = 100 + in[6]; /* back to years since 1900 */
-}
-
-/* ---- public API ---- */
-
 int statistic_load(uint16_t *count, uint8_t *state, struct tm *t_out)
 {
     uint8_t buf[STAT_LEN_BYTES] = {0};

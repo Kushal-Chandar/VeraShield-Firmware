@@ -4,11 +4,11 @@
 LOG_MODULE_REGISTER(led_ctrl, LOG_LEVEL_INF);
 
 #define USER_NODE DT_PATH(zephyr_user)
-#define SPI_NODE DT_NODELABEL(spi2)
+#define SPI_NODE DT_NODELABEL(spi1)
 
 /* TLC5916: SPI mode 0, MSB first */
 static const struct spi_config spi_cfg = {
-    .frequency = 200000U, /* safe bring-up */
+    .frequency = 1000000U, /* safe bring-up */
     .operation = SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_TRANSFER_MSB,
     .slave = 0,
 };
