@@ -12,6 +12,6 @@ int spray_init(void);
 int spray_callback(void);
 bool is_spray_cycle_active(void);
 void spray_stop(void);
-void spray_action_with_cfg(struct cycle_cfg_t);
+void ble_spray_caller(uint8_t state);
 
 #endif /* SPRAY_H */

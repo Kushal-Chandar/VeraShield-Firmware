@@ -11,6 +11,7 @@
 #include "spray.h"
 #include "slider.h"
 #include "pcf8563.h"
+#include "tm_helpers.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 

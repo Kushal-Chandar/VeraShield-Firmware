@@ -11,9 +11,9 @@ static const struct adc_dt_spec adc_slider =
 
 enum slider_state
 {
-    SL_LOW = 0,
-    SL_MID = 1,
-    SL_HIGH = 2
+    SL_LOW = 1,
+    SL_MID = 2,
+    SL_HIGH = 3
 };
 static enum slider_state last_state = SL_LOW;
 
