@@ -8,8 +8,9 @@
 #include "cycle.h"
 #include "slider.h"
 #include "led_ctrl.h"
-#include "statistic.h"
+#include "stats.h"
 #include "pcf8563.h"
+#include "tm_helpers.h"
 
 LOG_MODULE_REGISTER(SPRAY, LOG_LEVEL_INF);
 
@@ -30,8 +31,8 @@ static enum {
 
 struct phase_ctx
 {
-    bool has_cfg;
-    struct cycle_cfg_t cfg;
+    bool has_state;
+    uint8_t state; // only last 2 bits used
 };
 static struct phase_ctx phase_context;
 
@@ -39,60 +40,67 @@ static void phase_timer_handler(struct k_timer *timer);
 static void blink_timer_handler(struct k_timer *timer);
 static void monitor_timer_handler(struct k_timer *timer);
 static void start_spray_cycle(void);
-static void start_spray_cycle_with_cfg(struct cycle_cfg_t cfg);
+static void start_spray_cycle_with_state(uint8_t state);
 
 struct cycle_work
 {
     struct k_work work;
-    bool has_cfg;
-    struct cycle_cfg_t s_cfg;
+    bool has_state;
+    uint8_t state; // only last 2 bits used
 };
-
 static struct cycle_work start_cycle_work;
 
 static void start_cycle_work_handler(struct k_work *work)
 {
     struct cycle_work *cw = CONTAINER_OF(work, struct cycle_work, work);
 
-    /* Read slider once: use for config (if needed) + persisted state */
     int mv = slider_read_millivolts();
     int slider_state = slider_classify_from_mv(mv);
 
-    struct cycle_cfg_t cfg_used;
-    if (cw->has_cfg)
-    {
-        cfg_used = cw->s_cfg;
-    }
-    else
-    {
-        slider_state_to_cycle_cfg(slider_state, &cfg_used);
-    }
+    // clamp to 2 bits
+    uint8_t chosen_state = cw->has_state ? (cw->state & 0x03) : (uint8_t)(slider_state & 0x03);
 
+    struct cycle_cfg_t cfg_used;
+    slider_state_to_cycle_cfg((int)chosen_state, &cfg_used);
     cycle_set_cfg(&cfg_used);
 
-    LOG_INF("Configured cycle: spray=%dms, idle=%dms, repeats=%d",
-            cfg_used.spray_ms, cfg_used.idle_ms, cfg_used.repeats);
+    LOG_INF("Configured cycle: spray=%dms, idle=%dms, repeats=%d (state=%u)",
+            cfg_used.spray_ms, cfg_used.idle_ms, cfg_used.repeats, chosen_state);
 
-    /* Persist: increment count + store slider_state + RTC time (all-or-nothing) */
     {
         struct pcf8563 *rtc = pcf8563_get();
-        int rc = statistic_increment_with_rtc(rtc, (uint8_t)slider_state);
+        struct tm now = {0};
+        int rc = pcf8563_get_time(rtc, &now);
         if (rc)
         {
-            LOG_WRN("statistic write failed: %d", rc);
+            LOG_WRN("RTC read failed: %d (skipping stats append)", rc);
+        }
+        else if (!tm_sane(&now))
+        {
+            LOG_WRN("RTC time not sane (skipping stats append)");
         }
         else
         {
-            /* Optional: quick read-back for trace */
-            uint16_t cnt;
-            uint8_t st;
-            struct tm ts;
-            if (!statistic_load(&cnt, &st, &ts))
+            uint8_t inten2b = (uint8_t)(chosen_state & 0x03);
+            int ok = stats_append_tm(&now, inten2b);
+            if (!ok)
             {
-                LOG_INF("stats: count=%u, state=%u, %04d-%02d-%02d %02d:%02d:%02d",
-                        cnt, st,
-                        ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday,
-                        ts.tm_hour, ts.tm_min, ts.tm_sec);
+                LOG_WRN("stats: append failed (full or I/O error)");
+            }
+            else
+            {
+                uint8_t cnt8 = stats_count();
+                if (cnt8 > 0)
+                {
+                    struct tm ts = {0};
+                    uint8_t st = 0xFF;
+                    if (stats_get_tm((uint8_t)(cnt8 - 1), &ts, &st))
+                    {
+                        char buf[64];
+                        LOG_INF("stats: count=%u, state=%u, %s",
+                                (unsigned)cnt8, (unsigned)st, tm_to_str(&ts, buf, sizeof(buf)));
+                    }
+                }
             }
         }
     }
@@ -110,19 +118,18 @@ void spray_action(void)
         return;
     }
 
-    LOG_INF("Button Pressed - Starting 5s sequence (auto)");
+    LOG_INF("Button Pressed - Starting sequence (auto)");
 
-    phase_context.has_cfg = false;
+    phase_context.has_state = false;
 
     current_state = STATE_SLOW_BLINK;
     // led_spray_set(true);
 
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
-
     k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
 }
 
-void spray_action_with_cfg(struct cycle_cfg_t cfg)
+void ble_spray_caller(uint8_t state)
 {
     if (current_state != STATE_IDLE)
     {
@@ -130,10 +137,12 @@ void spray_action_with_cfg(struct cycle_cfg_t cfg)
         return;
     }
 
-    LOG_INF("Button Pressed - Starting 5s sequence (custom cfg)");
+    state &= 0x03; // only keep last 2 bits
 
-    phase_context.cfg = cfg;
-    phase_context.has_cfg = true;
+    LOG_INF("BLE spray request (state=%u)", state);
+
+    phase_context.state = state;
+    phase_context.has_state = true;
 
     current_state = STATE_SLOW_BLINK;
     // led_spray_set(true);
@@ -176,9 +185,9 @@ static void phase_timer_handler(struct k_timer *timer)
 
     case STATE_SOLID:
         LOG_INF("Sequence complete - starting spray cycle");
-        if (ctx && ctx->has_cfg)
+        if (ctx && ctx->has_state)
         {
-            start_spray_cycle_with_cfg(ctx->cfg);
+            start_spray_cycle_with_state(ctx->state & 0x03);
         }
         else
         {
@@ -212,7 +221,7 @@ static void monitor_timer_handler(struct k_timer *timer)
             current_state = STATE_IDLE;
             k_timer_stop(&monitor_timer);
             // led_spray_set(false);
-            phase_context.has_cfg = false;
+            phase_context.has_state = false;
         }
         else
         {
@@ -223,20 +232,20 @@ static void monitor_timer_handler(struct k_timer *timer)
 
 static void start_spray_cycle(void)
 {
-    LOG_INF("Starting spray cycle (auto)");
+    LOG_INF("Starting spray cycle (auto/slider)");
     current_state = STATE_MONITORING_CYCLE;
     // led_spray_set(true);
-    start_cycle_work.has_cfg = false;
+    start_cycle_work.has_state = false;
     k_work_submit(&start_cycle_work.work);
 }
 
-static void start_spray_cycle_with_cfg(struct cycle_cfg_t cfg)
+static void start_spray_cycle_with_state(uint8_t state)
 {
-    LOG_INF("Starting spray cycle (custom cfg)");
+    LOG_INF("Starting spray cycle (override state=%u)", state & 0x03);
     current_state = STATE_MONITORING_CYCLE;
     // led_spray_set(true);
-    start_cycle_work.s_cfg = cfg;
-    start_cycle_work.has_cfg = true;
+    start_cycle_work.state = (uint8_t)(state & 0x03);
+    start_cycle_work.has_state = true;
     k_work_submit(&start_cycle_work.work);
 }
 
@@ -259,7 +268,7 @@ void spray_stop(void)
         current_state = STATE_IDLE;
         k_timer_stop(&monitor_timer);
         // led_spray_set(false);
-        phase_context.has_cfg = false;
+        phase_context.has_state = false;
     }
 
     if (current_state != STATE_IDLE)
@@ -269,7 +278,7 @@ void spray_stop(void)
         k_timer_stop(&phase_timer);
         k_timer_stop(&blink_timer);
         // led_spray_set(false);
-        phase_context.has_cfg = false;
+        phase_context.has_state = false;
     }
 }
 

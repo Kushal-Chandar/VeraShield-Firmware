@@ -11,10 +11,11 @@
 #include "spray.h"
 #include "slider.h"
 #include "pcf8563.h"
+#include "tm_helpers.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
-#define PCF8563_NODE DT_NODELABEL(pcf8563) // or DT_ALIAS(pcf8563)
+#define PCF8563_NODE DT_NODELABEL(pcf8563)
 
 static struct pcf8563 rtc = {
     .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
