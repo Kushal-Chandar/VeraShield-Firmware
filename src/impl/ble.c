@@ -20,6 +20,7 @@
 #include "ble.h"
 #include "spray.h"
 #include "pcf8563.h"
+#include "schedule.h"
 
 LOG_MODULE_REGISTER(BLE, LOG_LEVEL_INF);
 
@@ -31,6 +32,12 @@ enum
     ST_HDR = 2,
     ST_ENTRY = 8,
     ST_MAX_RETURNED = 63
+};
+
+enum
+{
+    SCH_HDR = 1,
+    SCH_ENTRY = 8
 };
 
 static int parse_gadi_time_payload(const uint8_t *buf, uint16_t len, struct tm *out)
@@ -60,8 +67,84 @@ static int parse_gadi_time_payload(const uint8_t *buf, uint16_t len, struct tm *
 static ssize_t schedule_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                              void *buf, uint16_t len, uint16_t offset)
 {
-    static const uint8_t sched_example[] = {0x01, 0x02};
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, sched_example, sizeof(sched_example));
+
+    LOG_INF("schedule_read: handle=0x%04x offset=%u len=%u",
+            attr ? attr->handle : 0, offset, len);
+    const uint8_t total = sched_count();
+    const uint32_t full_len = (uint32_t)SCH_HDR + (uint32_t)total * SCH_ENTRY;
+
+    if (offset > full_len)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+    if (offset == full_len)
+    {
+        return 0; // nothing left
+    }
+
+    uint16_t to_copy = len;
+    if ((uint32_t)offset + to_copy > full_len)
+    {
+        to_copy = (uint16_t)(full_len - offset);
+    }
+
+    uint8_t out[to_copy];
+    uint16_t produced = 0;
+    uint32_t cur = offset;
+
+    // Header slice
+    if (cur < SCH_HDR)
+    {
+        const uint8_t hdr[SCH_HDR] = {total};
+        const uint16_t hdr_rem = (uint16_t)(SCH_HDR - cur);
+        const uint16_t chunk = (hdr_rem < to_copy) ? hdr_rem : to_copy;
+        memcpy(out, &hdr[cur], chunk);
+        produced += chunk;
+        cur += chunk;
+
+        LOG_INF("Schedule Read: count=%u", total);
+    }
+
+    // Entry slices
+    while (produced < to_copy)
+    {
+        const uint32_t entries_off = cur - SCH_HDR;
+        const uint16_t rel_idx = (uint16_t)(entries_off / SCH_ENTRY);
+        const uint8_t entry_off = (uint8_t)(entries_off % SCH_ENTRY);
+        const uint16_t abs_idx = rel_idx;
+
+        uint8_t time7[7], inten2b = 0;
+        if (sched_get((uint8_t)abs_idx, time7, &inten2b) < 0)
+        {
+            LOG_WRN("sched_get(%u) failed while building read", abs_idx);
+            break;
+        }
+
+        uint8_t entry_buf[SCH_ENTRY];
+        memcpy(entry_buf, time7, 7);
+        entry_buf[7] = (uint8_t)(inten2b & 0x03);
+
+        const uint16_t entry_rem = (uint16_t)(SCH_ENTRY - entry_off);
+        const uint16_t space_rem = (uint16_t)(to_copy - produced);
+        const uint16_t chunk = (entry_rem < space_rem) ? entry_rem : space_rem;
+
+        memcpy(out + produced, entry_buf + entry_off, chunk);
+        produced += chunk;
+        cur += chunk;
+
+        if (entry_off == 0)
+        {
+            struct tm tmv = {0};
+            tm_from_7(&tmv, time7);
+            char tsbuf[64];
+            (void)tm_to_str(&tmv, tsbuf, sizeof(tsbuf));
+            LOG_INF("Schedule[%u]: %s  intensity=%u",
+                    abs_idx, tsbuf, (unsigned)(inten2b & 0x03));
+        }
+    }
+
+    LOG_HEXDUMP_INF(out, produced, "Schedule Read Slice");
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, out, produced);
 }
 
 static ssize_t statistics_read(struct bt_conn *conn,
@@ -135,10 +218,8 @@ static ssize_t statistics_read(struct bt_conn *conn,
         produced += chunk;
         cur += chunk;
 
-        // Only log the entry once when we start at its offset 0 (avoids duplicate logs on long reads)
         if (entry_off == 0)
         {
-            // Decode to human-readable time
             struct tm tmv = {0};
             tm_from_7(&tmv, time7); // month expected 0..11 per your comment above
             char tsbuf[64];
@@ -204,11 +285,65 @@ static ssize_t schedule_write(struct bt_conn *conn, const struct bt_gatt_attr *a
 {
     if (offset != 0)
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-    if (len == 0)
+    if (len < 1)
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 
-    /* parse buf,len and apply config if you want; for now just trigger */
-    // do_shit();
+    if (conn)
+    {
+        uint16_t mtu = bt_gatt_get_mtu(conn);
+        uint16_t max_payload = (mtu > 3) ? (uint16_t)(mtu - 3u) : 0u;
+        if (len > max_payload)
+        {
+            LOG_WRN("Schedule write refused: payload=%u > (MTU-3)=%u (MTU=%u). "
+                    "App must negotiate MTU >= %u.",
+                    len, max_payload, mtu, (uint16_t)(len + 3u));
+            return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+        }
+    }
+
+    const uint8_t *p = buf;
+    const uint8_t count = p[0];
+
+    if (count > SCHED_CAP)
+    {
+        LOG_WRN("Schedule write: count=%u > cap=%u", count, SCHED_CAP);
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    const uint32_t expect = (uint32_t)SCH_HDR + (uint32_t)count * SCH_ENTRY;
+    if (len != expect)
+    {
+        LOG_WRN("Schedule write: len=%u expect=%u (count=%u)", len, (unsigned)expect, count);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    // Validate all entries first
+    for (uint8_t i = 0; i < count; ++i)
+    {
+        const uint8_t *e = &p[SCH_HDR + (uint32_t)i * SCH_ENTRY];
+        struct tm t = {0};
+        tm_from_7(&t, e);
+        if (!tm_sane(&t))
+        {
+            LOG_WRN("Schedule write: invalid time at idx=%u", i);
+            return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+        }
+    }
+
+    sched_clear();
+    for (uint8_t i = 0; i < count; ++i)
+    {
+        const uint8_t *e = &p[SCH_HDR + (uint32_t)i * SCH_ENTRY];
+        const uint8_t inten = (uint8_t)(e[7] & 0x03);
+        int r = sched_append(e, inten);
+        if (r < 0)
+        {
+            LOG_ERR("sched_append failed at %u rc=%d", i, r);
+            return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+        }
+    }
+
+    LOG_INF("Schedule updated: count=%u (single-shot write)", count);
     return len;
 }
 
