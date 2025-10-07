@@ -11,5 +11,5 @@ target_sources(app PRIVATE
   slider.c
   spray.c
   stats.c
-  # schedule.c
+  schedule.c
 )

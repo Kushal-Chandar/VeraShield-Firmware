@@ -12,6 +12,9 @@
 #include "slider.h"
 #include "pcf8563.h"
 #include "tm_helpers.h"
+#include "stats.h"
+#include "schedule.h"
+#include "at24c32.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
@@ -165,6 +168,9 @@ int main(void)
         return -1;
     }
     pcf8563_bind(&rtc);
+    at24c32_init();
+    stats_init_if_blank();
+    sched_init_if_blank();
     seed_time_from_build_if_needed();
 
     cycle_init();
