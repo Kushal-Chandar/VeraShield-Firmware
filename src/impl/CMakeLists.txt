@@ -12,4 +12,5 @@ target_sources(app PRIVATE
   spray.c
   stats.c
   schedule.c
+  schedule_queue.c
 )

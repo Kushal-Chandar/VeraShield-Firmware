@@ -35,3 +35,20 @@ void tm_from_7(struct tm *t, const uint8_t in[7])
     t->tm_mon = in[5];  /* 0..11 */
     t->tm_year = in[6]; /* years since 1900 */
 }
+
+int tm_cmp(const struct tm *a, const struct tm *b)
+{
+    // if (a->tm_year != b->tm_year)
+    //     return a->tm_year - b->tm_year;
+    // if (a->tm_mon != b->tm_mon)
+    //     return a->tm_mon - b->tm_mon;
+    // if (a->tm_mday != b->tm_mday)
+    //     return a->tm_mday - b->tm_mday;
+    if (a->tm_hour != b->tm_hour)
+        return a->tm_hour - b->tm_hour;
+    if (a->tm_min != b->tm_min)
+        return a->tm_min - b->tm_min;
+    // if (a->tm_sec != b->tm_sec)
+    //     return a->tm_sec - b->tm_sec;
+    return 0;
+}

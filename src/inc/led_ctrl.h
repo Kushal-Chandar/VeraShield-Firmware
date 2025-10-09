@@ -14,9 +14,7 @@ typedef enum
     LED_GREEN = 1, /* OUT1 -> G_LED   */
     LED_BLUE = 2,  /* OUT2 -> B_LED   */
     LED_BLT = 3,   /* OUT3 -> BLT_LED */
-    LED_PW = 4,    /* OUT4 -> PW_LED  */
-    // to change for new pcb, out 4 is spray led
-    LED_SPR = 5, /* OUT5 -> SPR_LED */
+    LED_SPR = 4,   /* OUT4 -> PW_LED  */
 } led_id_t;
 
 int led_ctrl_init(void);

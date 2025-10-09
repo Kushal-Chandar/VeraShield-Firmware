@@ -20,6 +20,7 @@
 #include "ble.h"
 #include "spray.h"
 #include "pcf8563.h"
+#include "schedule_queue.h"
 #include "schedule.h"
 
 LOG_MODULE_REGISTER(BLE, LOG_LEVEL_INF);
@@ -342,6 +343,7 @@ static ssize_t schedule_write(struct bt_conn *conn, const struct bt_gatt_attr *a
             return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
         }
     }
+    schedule_queue_sync_and_arm_next();
 
     LOG_INF("Schedule updated: count=%u (single-shot write)", count);
     return len;

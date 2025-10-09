@@ -83,6 +83,10 @@ int led_ctrl_init(void)
     if (ret)
         return ret;
 
+    led_ctrl_all_on();
+    k_sleep(K_MSEC(500));
+    (void)led_ctrl_all_off();
+
     return 0;
 }
 
@@ -95,9 +99,7 @@ int led_ctrl_write(uint8_t value)
 {
     int ret = tlc5916_latch_byte(value);
     if (ret == 0)
-    {
         shadow_byte = value;
-    }
     return ret;
 }
 
