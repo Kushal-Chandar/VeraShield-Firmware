@@ -18,10 +18,10 @@ enum slider_state
 static enum slider_state last_state = SL_LOW;
 
 /* Hysteresis (mV) — tune to your hardware */
-#define SL_MID_ENTER_MV 1900
-#define SL_MID_EXIT_MV 1750
-#define SL_HIGH_ENTER_MV 2400
-#define SL_HIGH_EXIT_MV 2250
+#define SL_MID_ENTER_MV 2000
+#define SL_MID_EXIT_MV 2700
+#define SL_HIGH_ENTER_MV 3500
+#define SL_HIGH_EXIT_MV 4095
 
 int slider_init(void)
 {
@@ -38,6 +38,8 @@ int slider_init(void)
     }
     return 0;
 }
+
+int mv;
 
 int slider_read_millivolts(void)
 {
@@ -59,14 +61,14 @@ int slider_read_millivolts(void)
         LOG_ERR("slider adc_read: %d", err);
         return err;
     }
-    int mv = (int)raw;
+    // mv = (int)raw;
     err = adc_raw_to_millivolts_dt(&adc_slider, &mv);
     if (err < 0)
     {
         LOG_ERR("adc_raw_to_millivolts_dt: %d", err);
         return err;
     }
-    return mv;
+    return raw;
 }
 
 int slider_classify_from_mv(int mv)

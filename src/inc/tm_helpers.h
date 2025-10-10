@@ -7,6 +7,7 @@
 bool tm_sane(const struct tm *t);
 void tm_to_7(const struct tm *t, uint8_t out[7]);
 void tm_from_7(struct tm *t, const uint8_t in[7]);
+int tm_cmp(const struct tm *a, const struct tm *b);
 
 static inline const char *tm_to_str(const struct tm *t, char *buf, size_t len)
 {

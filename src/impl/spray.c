@@ -123,7 +123,7 @@ void spray_action(void)
     phase_context.has_state = false;
 
     current_state = STATE_SLOW_BLINK;
-    // led_spray_set(true);
+    led_spray_set(true);
 
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
     k_timer_start(&phase_timer, K_MSEC(2000), K_NO_WAIT);
@@ -145,7 +145,7 @@ void ble_spray_caller(uint8_t state)
     phase_context.has_state = true;
 
     current_state = STATE_SLOW_BLINK;
-    // led_spray_set(true);
+    led_spray_set(true);
 
     k_timer_start(&blink_timer, K_MSEC(500), K_MSEC(500));
 
@@ -178,7 +178,7 @@ static void phase_timer_handler(struct k_timer *timer)
         current_state = STATE_SOLID;
 
         k_timer_stop(&blink_timer);
-        // led_spray_set(true);
+        led_spray_set(true);
 
         k_timer_start(&phase_timer, K_NO_WAIT, K_NO_WAIT);
         break;
@@ -204,7 +204,7 @@ static void blink_timer_handler(struct k_timer *timer)
 {
     if (current_state == STATE_SLOW_BLINK || current_state == STATE_FAST_BLINK)
     {
-        // led_spray_toggle();
+        led_spray_toggle();
     }
 }
 
@@ -220,12 +220,12 @@ static void monitor_timer_handler(struct k_timer *timer)
             LOG_INF("Spray cycle completed");
             current_state = STATE_IDLE;
             k_timer_stop(&monitor_timer);
-            // led_spray_set(false);
+            led_spray_set(false);
             phase_context.has_state = false;
         }
         else
         {
-            // led_spray_set(true);
+            led_spray_set(true);
         }
     }
 }
@@ -234,7 +234,7 @@ static void start_spray_cycle(void)
 {
     LOG_INF("Starting spray cycle (auto/slider)");
     current_state = STATE_MONITORING_CYCLE;
-    // led_spray_set(true);
+    led_spray_set(true);
     start_cycle_work.has_state = false;
     k_work_submit(&start_cycle_work.work);
 }
@@ -243,7 +243,7 @@ static void start_spray_cycle_with_state(uint8_t state)
 {
     LOG_INF("Starting spray cycle (override state=%u)", state & 0x03);
     current_state = STATE_MONITORING_CYCLE;
-    // led_spray_set(true);
+    led_spray_set(true);
     start_cycle_work.state = (uint8_t)(state & 0x03);
     start_cycle_work.has_state = true;
     k_work_submit(&start_cycle_work.work);
@@ -267,7 +267,7 @@ void spray_stop(void)
         cycle_stop();
         current_state = STATE_IDLE;
         k_timer_stop(&monitor_timer);
-        // led_spray_set(false);
+        led_spray_set(false);
         phase_context.has_state = false;
     }
 
@@ -277,7 +277,7 @@ void spray_stop(void)
         current_state = STATE_IDLE;
         k_timer_stop(&phase_timer);
         k_timer_stop(&blink_timer);
-        // led_spray_set(false);
+        led_spray_set(false);
         phase_context.has_state = false;
     }
 }

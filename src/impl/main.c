@@ -13,7 +13,9 @@
 #include "pcf8563.h"
 #include "tm_helpers.h"
 #include "stats.h"
+#include "schedule_queue.h"
 #include "schedule.h"
+#include "led_ctrl.h"
 #include "at24c32.h"
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
@@ -57,9 +59,6 @@ static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
-
-static const struct gpio_dt_spec status_led =
-    GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0});
 
 #define RUN_LED_BLINK_INTERVAL 1000
 
@@ -115,7 +114,7 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
     is_connected = true;
     is_advertising = false;
     k_work_cancel_delayable(&adv_stop_work);
-    gpio_pin_set_dt(&status_led, 1);
+    led_blt_set(true);
     LOG_INF("Connected");
 }
 
@@ -145,33 +144,42 @@ static void advertising_start(void)
     k_work_submit(&adv_work);
 }
 
+static void motor_action(uint8_t intensity, const struct tm *when)
+{
+    (void)when;
+    // motor_start_with_intensity(intensity);
+    ble_spray_caller(intensity);
+}
+
+static void rtc_alarm_cb(void *user)
+{
+    (void)user;
+    (void)schedule_queue_on_alarm(motor_action);
+}
+
 int main(void)
 {
     int err;
 
-    LOG_INF("Starting BLE + status LED");
-
-    if (!device_is_ready(status_led.port))
-    {
-        LOG_ERR("status_led port not ready");
-        return -1;
-    }
-    err = gpio_pin_configure_dt(&status_led, GPIO_OUTPUT_INACTIVE);
+    err = led_ctrl_init();
     if (err)
     {
-        LOG_ERR("LED config err %d", err);
-        return -1;
+        printk("led_ctrl_init() failed: %d\n", err);
+        return err;
     }
-    if (!device_is_ready(rtc.i2c.bus))
-    {
-        printk("I2C bus not ready\n");
-        return -1;
-    }
+
+    LOG_INF("BOOT");
+
+    pcf8563_init(&rtc);
     pcf8563_bind(&rtc);
+    pcf8563_set_alarm_callback(&rtc, rtc_alarm_cb, NULL);
     at24c32_init();
     stats_init_if_blank();
     sched_init_if_blank();
+    schedule_queue_init_if_blank();
     seed_time_from_build_if_needed();
+
+    (void)schedule_queue_sync_and_arm_next();
 
     cycle_init();
     cycle_tick_start();
@@ -199,23 +207,27 @@ int main(void)
     k_work_init_delayable(&adv_stop_work, adv_stop_work_handler);
     advertising_start();
 
-    bool led_on = false;
     while (1)
     {
         if (is_connected)
         {
-            gpio_pin_set_dt(&status_led, 1);
-            k_sleep(K_MSEC(500));
+            led_blt_set(true);
+            // k_sleep(K_MSEC(500));
+            k_sleep(K_MSEC(5000));
+            char tsbuf[100];
+            struct tm t;
+            pcf8563_get_time(&rtc, &t);
+            LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
         }
         else if (is_advertising)
         {
-            led_on = !led_on;
-            gpio_pin_set_dt(&status_led, led_on);
+
+            led_blt_toggle();
             k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
         }
         else
         {
-            gpio_pin_set_dt(&status_led, 0);
+            led_blt_set(false);
             k_sleep(K_MSEC(500));
         }
     }
