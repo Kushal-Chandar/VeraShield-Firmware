@@ -24,32 +24,33 @@ extern "C"
 #define SCHEDULE_QUEUE_ENTRY_SIZE (SCHEDULE_QUEUE_TIME_LEN + 1u)
 #define SCHEDULE_QUEUE_TOTAL_LEN (1u + (SCHEDULE_QUEUE_CAP * SCHEDULE_QUEUE_ENTRY_SIZE))
 
-    /* API */
-    void schedule_queue_init_if_blank(void);
-    void schedule_queue_clear(void);
-    uint8_t schedule_queue_count(void);
+   /* API */
+   void schedule_queue_init_if_blank(void);
+   void schedule_queue_clear(void);
+   uint8_t schedule_queue_count(void);
+   void schedule_queue_log(void);
 
-    /* Appends at end. Returns 0 on success, -1 on bad args/full/EEPROM error. */
-    int schedule_queue_push(const uint8_t time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t intensity2b);
+   /* Appends at end. Returns 0 on success, -1 on bad args/full/EEPROM error. */
+   int schedule_queue_push(const uint8_t time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t intensity2b);
 
-    /* Reads the first entry (index 0). Returns 0 on success, -1 if empty/bad args/EEPROM error. */
-    int schedule_queue_peek(uint8_t out_time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t *out_int2b);
+   /* Reads the first entry (index 0). Returns 0 on success, -1 if empty/bad args/EEPROM error. */
+   int schedule_queue_peek(uint8_t out_time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t *out_int2b);
 
-    /* Removes first entry and compacts remaining left by one.
-       Returns 0 on success, -1 if empty/bad args/EEPROM error. */
-    int schedule_queue_pop(uint8_t out_time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t *out_int2b);
+   /* Removes first entry and compacts remaining left by one.
+      Returns 0 on success, -1 if empty/bad args/EEPROM error. */
+   int schedule_queue_pop(uint8_t out_time7[SCHEDULE_QUEUE_TIME_LEN], uint8_t *out_int2b);
 
-    /* Rebuild from sched_* storage (sorted by time asc). Returns count (0..CAP), or -1 on EEPROM error. */
-    int schedule_queue_rebuild_from_sched(void);
+   /* Rebuild from sched_* storage (sorted by time asc). Returns count (0..CAP), or -1 on EEPROM error. */
+   int schedule_queue_rebuild_from_sched(void);
 
-    /* Clean past entries and arm the next future one (does NOT pop).
-       Returns: 0=armed, 1=nothing to arm, -1 RTC error, -2 queue I/O, -3 RTC arm error */
-    int schedule_queue_sync_and_arm_next(void);
+   /* Clean past entries and arm the next future one (does NOT pop).
+      Returns: 0=armed, 1=nothing to arm, -1 RTC error, -2 queue I/O, -3 RTC arm error */
+   int schedule_queue_sync_and_arm_next(void);
 
-    /* Call from your PCF8563 alarm callback/work item.
-       - Reads head (for intensity), runs your action, pops one, then arms next.
-       Returns same codes as sync_and_arm_next(). */
-    int schedule_queue_on_alarm(void (*do_action)(uint8_t intensity, const struct tm *when));
+   /* Call from your PCF8563 alarm callback/work item.
+      - Reads head (for intensity), runs your action, pops one, then arms next.
+      Returns same codes as sync_and_arm_next(). */
+   int schedule_queue_on_alarm(void (*do_action)(uint8_t intensity, const struct tm *when));
 
 #ifdef __cplusplus
 }

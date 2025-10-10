@@ -4,10 +4,69 @@
 #include "at24c32.h"
 #include "tm_helpers.h"
 #include "pcf8563.h"
+#include <zephyr/logging/log.h>
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
+
+LOG_MODULE_REGISTER(schedule_queue, LOG_LEVEL_INF);
+
+static void bytes_to_hex_7(const uint8_t in[7], char out[3 * 7 + 1])
+{
+    /* out must be at least 22 bytes ("XX XX XX XX XX XX XX\0") */
+    static const char *hex = "0123456789ABCDEF";
+    for (int i = 0; i < 7; i++)
+    {
+        out[i * 3 + 0] = hex[(in[i] >> 4) & 0xF];
+        out[i * 3 + 1] = hex[in[i] & 0xF];
+        out[i * 3 + 2] = (i == 6) ? '\0' : ' ';
+    }
+}
+
+void schedule_queue_log(void)
+{
+    uint8_t count = schedule_queue_count();
+
+    if (count == 0xFF)
+    {
+        LOG_INF("schedule: queue appears uninitialized");
+        return;
+    }
+    if (count == 0)
+    {
+        LOG_INF("schedule: queue is empty");
+        return;
+    }
+
+    LOG_INF("schedule: queue has %u entr%s", count, (count == 1) ? "y" : "ies");
+
+    for (uint8_t i = 0; i < count; i++)
+    {
+        uint8_t time7[SCHEDULE_QUEUE_TIME_LEN];
+        uint8_t intensity = 0;
+        int rc = schedule_queue_pop(time7, &intensity);
+        if (rc != 0)
+        {
+            LOG_INF("schedule: failed to read entry %u (rc=%d)", i, rc);
+            return;
+        }
+
+        char hexbuf[3 * SCHEDULE_QUEUE_TIME_LEN + 1];
+        bytes_to_hex_7(time7, hexbuf);
+
+        LOG_INF("  [%u] time7=%s intensity=%u", i, hexbuf, intensity);
+
+        rc = schedule_queue_push(time7, intensity);
+        if (rc != 0)
+        {
+            LOG_INF("schedule: ERROR restoring entry %u (rc=%d); queue order may be altered", i, rc);
+            return;
+        }
+    }
+
+    LOG_INF("schedule: done listing %u entr%s", count, (count == 1) ? "y" : "ies");
+}
 
 /* ---- AT24 helpers ---- */
 static int rd8(uint16_t addr, uint8_t *v) { return at24c32_read_byte(addr, v); }
@@ -284,52 +343,96 @@ static int rtc_alarm_arm_hm(const struct tm *t)
  *   -2 = EEPROM/queue I/O error
  *   -3 = RTC arm error
  */
+// Returns: 0 = got sane head, 1 = nothing to arm, -2 = queue/peek error
+static int rebuild_and_fetch_sane_head(struct tm *head)
+{
+    LOG_INF("SC rebuild");
+    int n = schedule_queue_rebuild_from_sched();
+    if (n < 0)
+        return -2;
+    if (n == 0)
+        return 1; // still nothing
+
+    for (;;)
+    {
+        uint8_t t7[7];
+        uint8_t dummy_inten; // not used
+        if (schedule_queue_peek(t7, &dummy_inten) != 0)
+            return -2;
+
+        tm_from_7(head, t7);
+        if (tm_sane(head))
+            return 0;
+
+        (void)schedule_queue_pop(NULL, NULL); // drop insane and try next
+        if (schedule_queue_count() == 0)
+            return 1;
+    }
+}
+
+// Returns: 0 = got sane head, 1 = queue became empty, -2 = error
+static int peek_drop_insane_until_sane(struct tm *head)
+{
+    while (schedule_queue_count() > 0)
+    {
+        uint8_t t7[7];
+        uint8_t dummy_inten; // not used
+        if (schedule_queue_peek(t7, &dummy_inten) != 0)
+            return -2;
+
+        tm_from_7(head, t7);
+        if (tm_sane(head))
+            return 0;
+
+        (void)schedule_queue_pop(NULL, NULL);
+    }
+    return 1;
+}
+
 int schedule_queue_sync_and_arm_next(void)
 {
     struct tm now = {0};
     if (rtc_now(&now) != 0)
         return -1;
 
-    /* If empty, rebuild once */
-    if (schedule_queue_count() == 0)
-    {
-        int n = schedule_queue_rebuild_from_sched();
-        if (n < 0)
-            return -2;
-        if (n == 0)
-            return 1; /* still nothing */
-    }
+    char tsbuf[100];
 
-    /* Drop all stale entries (<= now) */
     for (;;)
     {
+        schedule_queue_log();
+
+        // EMPTY PATH: rebuild and arm first sane head (no compare to 'now')
         if (schedule_queue_count() == 0)
-            return 1;
-
-        uint8_t t7[7], inten;
-        if (schedule_queue_peek(t7, &inten) != 0)
-            return -2;
-
-        struct tm head = {0};
-        tm_from_7(&head, t7);
-
-        if (!tm_sane(&head))
         {
-            (void)schedule_queue_pop(NULL, NULL);
-            continue;
+            struct tm head = {0};
+            int rc = rebuild_and_fetch_sane_head(&head);
+            if (rc != 0) // 1 = nothing to arm, -2 = error
+                return rc;
+
+            return (rtc_alarm_arm_hm(&head) == 0) ? 0 : -3;
         }
+
+        // NON-EMPTY PATH: drop insane/stale; arm when head > now
+        struct tm head = {0};
+        int rc = peek_drop_insane_until_sane(&head);
+        if (rc == 1) // became empty while dropping insane -> loop to rebuild branch
+            continue;
+        if (rc < 0)
+            return rc;
+
+        LOG_INF("RTC now : %s", tm_to_str(&now, tsbuf, sizeof tsbuf));
+        LOG_INF("RTC head: %s", tm_to_str(&head, tsbuf, sizeof tsbuf));
 
         if (tm_cmp(&head, &now) <= 0)
         {
-            (void)schedule_queue_pop(NULL, NULL);
+            (void)schedule_queue_pop(NULL, NULL); // drop stale (<= now) and try again
             continue;
         }
 
-        /* head > now: leave it in place, just arm */
+        // head > now: arm and finish
         return (rtc_alarm_arm_hm(&head) == 0) ? 0 : -3;
     }
 }
-
 /*
  * Alarm handler helper.
  * Call this from your PCF8563 alarm callback/work item.

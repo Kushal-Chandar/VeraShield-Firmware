@@ -1,4 +1,4 @@
-/* vbat.c — drop-in replacement (no blinking) */
+/* vbat.c — drop-in replacement (percentage-based LED policy) */
 
 #include "vbat.h"
 #include <zephyr/device.h>
@@ -24,15 +24,18 @@ static bool running = false;
 /* declare if decide_period_ms() is provided elsewhere */
 extern uint32_t decide_period_ms(int mv);
 
-/* === Voltage bands (mV) === */
+/* === Voltage bounds (mV) for percentage conversion === */
 #define VBAT_FULL_MV 8400
 #define VBAT_EMPTY_MV 6000
-#define VBAT_GREEN_MV 7700
-#define VBAT_YELLOW_MV 7000
-#define VBAT_RED_MV 6600
+
+/* === Percentage bands (%) === */
+#define PCT_GREEN 80
+#define PCT_YELLOW 50
+#define PCT_RED 20
 
 /* Actual sampling interval */
 #define ADC_SAMPLE_INTERVAL_MS (5 * 60 * 1000)
+// #define ADC_SAMPLE_INTERVAL_MS (1000)
 
 /* ----- utilities ----- */
 
@@ -84,25 +87,25 @@ static void set_red(void)
     led_blue_set(false);
 }
 
-/* ----- apply LED policy based on voltage ----- */
+/* ----- apply LED policy based on percentage ----- */
 
-static void apply_leds_for_voltage(int mv)
+static void apply_leds_for_percent(uint8_t pct)
 {
-    if (mv >= VBAT_GREEN_MV)
+    if (pct >= PCT_GREEN)
     {
         set_green();
     }
-    else if (mv >= VBAT_YELLOW_MV)
+    else if (pct >= PCT_YELLOW)
     {
         set_yellow();
     }
-    else if (mv >= VBAT_RED_MV)
+    else if (pct >= PCT_RED)
     {
         set_red();
     }
     else
     {
-        set_red(); /* below red threshold stays red */
+        set_red(); /* ultra-low stays red */
     }
 }
 
@@ -144,7 +147,7 @@ static void sample_fn(struct k_work *work)
         LOG_INF("Battery: raw=%d mv=%d percent=%d%%",
                 raw, mv, battery_percent);
 
-        apply_leds_for_voltage(mv);
+        apply_leds_for_percent(battery_percent);
 
         err = bt_bas_set_battery_level(battery_percent);
         if (err)
@@ -162,8 +165,6 @@ static void sample_fn(struct k_work *work)
     }
 
     k_work_schedule(&sample_work, K_MSEC(ADC_SAMPLE_INTERVAL_MS));
-    LOG_INF("Next battery reading scheduled in %u ms",
-            (unsigned)ADC_SAMPLE_INTERVAL_MS);
 }
 
 /* ----- lifecycle ----- */

@@ -209,15 +209,15 @@ int main(void)
 
     while (1)
     {
-        // LOG_INF("%d", slider_read_millivolts());
         if (is_connected)
         {
             led_blt_set(true);
-            k_sleep(K_MSEC(500));
-            // char tsbuf[100];
-            // struct tm t;
-            // pcf8563_get_time(&rtc, &t);
-            // LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
+            // k_sleep(K_MSEC(500));
+            k_sleep(K_MSEC(5000));
+            char tsbuf[100];
+            struct tm t;
+            pcf8563_get_time(&rtc, &t);
+            LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
         }
         else if (is_advertising)
         {

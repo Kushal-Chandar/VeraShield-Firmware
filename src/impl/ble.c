@@ -71,6 +71,8 @@ static ssize_t schedule_read(struct bt_conn *conn, const struct bt_gatt_attr *at
 
     LOG_INF("schedule_read: handle=0x%04x offset=%u len=%u",
             attr ? attr->handle : 0, offset, len);
+
+    schedule_queue_log();
     const uint8_t total = sched_count();
     const uint32_t full_len = (uint32_t)SCH_HDR + (uint32_t)total * SCH_ENTRY;
 
@@ -343,6 +345,7 @@ static ssize_t schedule_write(struct bt_conn *conn, const struct bt_gatt_attr *a
             return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
         }
     }
+    schedule_queue_clear();
     schedule_queue_sync_and_arm_next();
 
     LOG_INF("Schedule updated: count=%u (single-shot write)", count);
@@ -382,6 +385,8 @@ static ssize_t gadi_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 
     char tsbuf[100];
     LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
+
+    schedule_queue_sync_and_arm_next();
 
     return len;
 }
