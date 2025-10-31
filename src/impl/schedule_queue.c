@@ -6,10 +6,6 @@
 #include "pcf8563.h"
 #include <zephyr/logging/log.h>
 
-#ifndef MIN
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#endif
-
 LOG_MODULE_REGISTER(schedule_queue, LOG_LEVEL_INF);
 
 static void bytes_to_hex_7(const uint8_t in[7], char out[3 * 7 + 1])

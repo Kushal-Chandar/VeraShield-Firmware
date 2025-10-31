@@ -29,9 +29,9 @@ extern uint32_t decide_period_ms(int mv);
 #define VBAT_EMPTY_MV 6000
 
 /* === Percentage bands (%) === */
-#define PCT_GREEN 80
-#define PCT_YELLOW 50
-#define PCT_RED 20
+#define PCT_GREEN 60
+#define PCT_YELLOW 30
+#define PCT_RED 10
 
 /* Actual sampling interval */
 #define ADC_SAMPLE_INTERVAL_MS (5 * 60 * 1000)
