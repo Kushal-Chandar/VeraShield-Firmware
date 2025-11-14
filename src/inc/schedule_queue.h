@@ -7,7 +7,6 @@ extern "C"
 {
 #endif
 
-/* Queue stored away from SCHED_BASE. Change if your map needs it. */
 #define SCHEDULE_QUEUE_BASE ((uint16_t)0x0440u)
 
 #define SCHEDULE_QUEUE_CAP 5u

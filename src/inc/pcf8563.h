@@ -1,4 +1,4 @@
-/* pcf8563.h */
+/* pcf8563.h - API kept as-is, implementation now targets MCP7940N */
 #ifndef PCF8563_H
 #define PCF8563_H
 
@@ -30,8 +30,8 @@ void pcf8563_set_alarm_callback(struct pcf8563 *dev,
 int pcf8563_get_time(struct pcf8563 *dev, struct tm *t_out);
 int pcf8563_set_time(struct pcf8563 *dev, const struct tm *t_in);
 
-int pcf8563_set_alarm_hm(struct pcf8563 *dev, int hour, int minute);
 int pcf8563_alarm_irq_enable(struct pcf8563 *dev, bool enable);
 int pcf8563_alarm_clear_flag(struct pcf8563 *dev);
+int pcf8563_set_alarm_tm(struct pcf8563 *dev, const struct tm *t);
 
 #endif

@@ -1,10 +1,21 @@
 #ifndef AT24C32_H
 #define AT24C32_H
 
+#include <zephyr/devicetree.h>
 #include <stdint.h>
 #include <stddef.h>
 
-#define AT24C32_ADDR 0x57
+/* Devicetree node for the EEPROM: label "at24c32" in your overlay */
+#define AT24C32_NODE DT_NODELABEL(at24c32)
+
+#if !DT_NODE_HAS_STATUS(AT24C32_NODE, okay)
+#error "AT24C32 devicetree node 'at24c32' not found or not okay"
+#endif
+
+/* I2C address from devicetree reg = <0x50>; */
+#define AT24C32_ADDR DT_REG_ADDR(AT24C32_NODE)
+
+/* 32 Kbit (4 KB) device */
 #define AT24C32_SIZE 4096                    /* 4KB total size */
 #define AT24C32_PAGE_SIZE 32u                /* 32-byte page size */
 #define AT24C32_MAX_ADDR (AT24C32_SIZE - 1u) /* Maximum address (0x0FFF) */

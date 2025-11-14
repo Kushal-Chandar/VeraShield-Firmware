@@ -2,7 +2,6 @@
 #include "at24c32.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
-#include "pcf8563.h"
 #include "tm_helpers.h"
 
 LOG_MODULE_REGISTER(stats, LOG_LEVEL_INF);

@@ -219,14 +219,6 @@ int schedule_queue_pop(uint8_t out_time7[7], uint8_t *out_int2b)
             return -1;
     }
 
-    /* Optionally clear last slot (not required for correctness) */
-    /*
-    {
-        uint8_t zeros[SCHEDULE_QUEUE_ENTRY_SIZE] = {0};
-        (void)wrb(entry_addr((uint8_t)(cnt - 1u)), zeros, sizeof(zeros));
-    }
-    */
-
     /* Decrement count */
     if (wr8(SCHEDULE_QUEUE_COUNT_OFF, (uint8_t)(cnt - 1u)) != 0)
         return -1;
@@ -288,16 +280,6 @@ int schedule_queue_rebuild_from_sched(void)
     if (wr8(SCHEDULE_QUEUE_COUNT_OFF, n) != 0)
         return -1;
 
-    /* Optional: clear any leftover slots */
-    /*
-    if (n < SCHEDULE_QUEUE_CAP) {
-        uint8_t zeros[SCHEDULE_QUEUE_ENTRY_SIZE] = {0};
-        for (uint8_t i = n; i < SCHEDULE_QUEUE_CAP; ++i) {
-            (void)wrb(entry_addr(i), zeros, sizeof(zeros));
-        }
-    }
-    */
-
     return n;
 }
 
@@ -309,37 +291,17 @@ static int rtc_now(struct tm *out)
     return (r && out) ? pcf8563_get_time(r, out) : -1;
 }
 
-/* PCF8563 alarm is minute-resolution; arm at H:M for the next entry. */
 static int rtc_alarm_arm_hm(const struct tm *t)
 {
     struct pcf8563 *r = rtc();
     if (!r || !t)
+    {
         return -1;
+    }
 
-    int rc = pcf8563_set_alarm_hm(r, t->tm_hour, t->tm_min);
-    if (rc)
-        return rc;
-    rc = pcf8563_alarm_clear_flag(r);
-    if (rc)
-        return rc;
-    return pcf8563_alarm_irq_enable(r, true);
+    return pcf8563_set_alarm_tm(r, t);
 }
 
-/*
- * Clean past entries and arm the next future one (no pop).
- * Behavior:
- *   - If queue is empty, rebuild from sched_* once.
- *   - Drop all entries with time <= now.
- *   - Stop at the first entry > now, DO NOT pop; arm RTC at its H:M.
- *
- * Returns:
- *    0 = armed next future entry
- *    1 = nothing to arm (empty after rebuild/cleanup)
- *   -1 = RTC read error
- *   -2 = EEPROM/queue I/O error
- *   -3 = RTC arm error
- */
-// Returns: 0 = got sane head, 1 = nothing to arm, -2 = queue/peek error
 static int rebuild_and_fetch_sane_head(struct tm *head)
 {
     LOG_INF("SC rebuild");
@@ -389,62 +351,82 @@ int schedule_queue_sync_and_arm_next(void)
 {
     struct tm now = {0};
     if (rtc_now(&now) != 0)
-        return -1;
+    {
+        return -1; /* RTC read error */
+    }
 
     char tsbuf[100];
 
+    /* If queue is empty, rebuild ONCE from sched_* */
+    uint8_t cnt = schedule_queue_count();
+    if (cnt == 0u)
+    {
+        LOG_INF("SC rebuild");
+        int n = schedule_queue_rebuild_from_sched();
+        if (n < 0)
+        {
+            return -2; /* EEPROM/queue error */
+        }
+        if (n == 0)
+        {
+            return 1; /* nothing in sched_* either */
+        }
+    }
+
+    struct tm head = {0};
+    int rc = peek_drop_insane_until_sane(&head);
+    if (rc == 1)
+    {
+        /* queue became empty while dropping insane */
+        return 1;
+    }
+    if (rc < 0)
+    {
+        /* -2 = error */
+        return rc;
+    }
+
+    /* Drop ALL stale entries (<= now). */
     for (;;)
     {
-        schedule_queue_log();
-
-        // EMPTY PATH: rebuild and arm first sane head (no compare to 'now')
-        if (schedule_queue_count() == 0)
-        {
-            struct tm head = {0};
-            int rc = rebuild_and_fetch_sane_head(&head);
-            if (rc != 0) // 1 = nothing to arm, -2 = error
-                return rc;
-
-            return (rtc_alarm_arm_hm(&head) == 0) ? 0 : -3;
-        }
-
-        // NON-EMPTY PATH: drop insane/stale; arm when head > now
-        struct tm head = {0};
-        int rc = peek_drop_insane_until_sane(&head);
-        if (rc == 1) // became empty while dropping insane -> loop to rebuild branch
-            continue;
-        if (rc < 0)
-            return rc;
-
         LOG_INF("RTC now : %s", tm_to_str(&now, tsbuf, sizeof tsbuf));
         LOG_INF("RTC head: %s", tm_to_str(&head, tsbuf, sizeof tsbuf));
 
-        if (tm_cmp(&head, &now) <= 0)
+        if (tm_cmp(&head, &now) > 0)
         {
-            (void)schedule_queue_pop(NULL, NULL); // drop stale (<= now) and try again
-            continue;
+            /* head is in the FUTURE → arm and done */
+            return (rtc_alarm_arm_hm(&head) == 0) ? 0 : -3;
         }
 
-        // head > now: arm and finish
-        return (rtc_alarm_arm_hm(&head) == 0) ? 0 : -3;
+        /* head <= now → stale, drop it */
+        (void)schedule_queue_pop(NULL, NULL);
+
+        if (schedule_queue_count() == 0u)
+        {
+            /* no more entries to arm */
+            return 1;
+        }
+
+        /* Get next sane head and loop */
+        rc = peek_drop_insane_until_sane(&head);
+        if (rc == 1)
+        {
+            return 1; /* emptied */
+        }
+        if (rc < 0)
+        {
+            return rc; /* error */
+        }
     }
 }
-/*
- * Alarm handler helper.
- * Call this from your PCF8563 alarm callback/work item.
- * Flow:
- *   - clear/disable RTC alarm
- *   - peek head (still present), run action with intensity
- *   - pop exactly one
- *   - arm next future entry
- */
+
 int schedule_queue_on_alarm(void (*do_action)(uint8_t intensity, const struct tm *when))
 {
     struct pcf8563 *r = rtc();
     if (r)
     {
+        (void)pcf8563_alarm_irq_enable(r, false);
         (void)pcf8563_alarm_clear_flag(r);
-        (void)pcf8563_alarm_irq_enable(r, false); /* avoid retrigger storms */
     }
 
     uint8_t t7[7], inten = 0;
