@@ -107,14 +107,14 @@ void slider_state_to_cycle_cfg(int state, struct cycle_cfg_t *cfg_out)
     switch (state)
     {
     case SL_HIGH:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 10000, .idle_ms = 2000, .repeats = 5};
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 10000, .idle_ms = 2000, .repeats = 8};
         break;
     case SL_MID:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 7000, .idle_ms = 2000, .repeats = 5};
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 7000, .idle_ms = 2000, .repeats = 9};
         break;
     case SL_LOW:
     default:
-        *cfg_out = (struct cycle_cfg_t){.spray_ms = 5000, .idle_ms = 2000, .repeats = 5};
+        *cfg_out = (struct cycle_cfg_t){.spray_ms = 5000, .idle_ms = 2000, .repeats = 10};
         break;
     }
 }
