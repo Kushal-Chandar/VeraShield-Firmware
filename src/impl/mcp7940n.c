@@ -1,9 +1,9 @@
-#include "pcf8563.h"
+#include "mcp7940n.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
-LOG_MODULE_REGISTER(pcf8563, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(mcp7940n, LOG_LEVEL_INF);
 
 #define REG_RTCSEC 0x00
 #define REG_RTCMIN 0x01
@@ -43,26 +43,26 @@ LOG_MODULE_REGISTER(pcf8563, LOG_LEVEL_INF);
 #define ALM0_IF BIT(3)
 
 /* I2C helpers */
-static int rd(struct pcf8563 *d, uint8_t reg, uint8_t *buf, size_t len)
+static int rd(struct mcp7940n *d, uint8_t reg, uint8_t *buf, size_t len)
 {
     return i2c_burst_read_dt(&d->i2c, reg, buf, len);
 }
 
-static int wr(struct pcf8563 *d, uint8_t reg, const uint8_t *buf, size_t len)
+static int wr(struct mcp7940n *d, uint8_t reg, const uint8_t *buf, size_t len)
 {
     return i2c_burst_write_dt(&d->i2c, reg, buf, len);
 }
 
-static int wr8(struct pcf8563 *d, uint8_t reg, uint8_t val)
+static int wr8(struct mcp7940n *d, uint8_t reg, uint8_t val)
 {
     return i2c_reg_write_byte_dt(&d->i2c, reg, val);
 }
 
 /* ---- Work item bound to each device ---- */
 
-static void pcf8563_work_handler(struct k_work *work)
+static void mcp7940n_work_handler(struct k_work *work)
 {
-    struct pcf8563 *dev = CONTAINER_OF(work, struct pcf8563, work);
+    struct mcp7940n *dev = CONTAINER_OF(work, struct mcp7940n, work);
 
     if (dev->alarm_cb)
     {
@@ -71,25 +71,25 @@ static void pcf8563_work_handler(struct k_work *work)
 }
 
 /* ISR: DO NOT touch I2C here. Just schedule work. */
-static void pcf8563_isr(const struct device *port,
-                        struct gpio_callback *cb,
-                        uint32_t pins)
+static void mcp7940n_isr(const struct device *port,
+                         struct gpio_callback *cb,
+                         uint32_t pins)
 {
     ARG_UNUSED(port);
     ARG_UNUSED(pins);
 
-    struct pcf8563 *dev = CONTAINER_OF(cb, struct pcf8563, gpio_cb);
+    struct mcp7940n *dev = CONTAINER_OF(cb, struct mcp7940n, gpio_cb);
     (void)k_work_submit(&dev->work);
 }
 
 /* Public API */
-static struct pcf8563 *g_dev;
-void pcf8563_bind(struct pcf8563 *dev) { g_dev = dev; }
-struct pcf8563 *pcf8563_get(void) { return g_dev; }
+static struct mcp7940n *g_dev;
+void mcp7940n_bind(struct mcp7940n *dev) { g_dev = dev; }
+struct mcp7940n *mcp7940n_get(void) { return g_dev; }
 
 /* --- Alarm helpers mapped onto MCP7940N Alarm 0 --- */
 
-int pcf8563_alarm_clear_flag(struct pcf8563 *dev)
+int mcp7940n_alarm_clear_flag(struct mcp7940n *dev)
 {
     uint8_t w;
     int rc = rd(dev, REG_ALM0WKDAY, &w, 1);
@@ -103,7 +103,7 @@ int pcf8563_alarm_clear_flag(struct pcf8563 *dev)
     return wr8(dev, REG_ALM0WKDAY, w);
 }
 
-int pcf8563_alarm_irq_enable(struct pcf8563 *dev, bool enable)
+int mcp7940n_alarm_irq_enable(struct mcp7940n *dev, bool enable)
 {
     uint8_t c;
     int rc = rd(dev, REG_CONTROL, &c, 1);
@@ -129,7 +129,7 @@ int pcf8563_alarm_irq_enable(struct pcf8563 *dev, bool enable)
 
 /* --- Init --- */
 
-int pcf8563_init(struct pcf8563 *dev)
+int mcp7940n_init(struct mcp7940n *dev)
 {
     if (!device_is_ready(dev->i2c.bus))
     {
@@ -166,7 +166,7 @@ int pcf8563_init(struct pcf8563 *dev)
     }
 
     /* Clear any stale ALM0IF flag. */
-    (void)pcf8563_alarm_clear_flag(dev);
+    (void)mcp7940n_alarm_clear_flag(dev);
 
     if (!device_is_ready(dev->int_gpio.port))
     {
@@ -187,18 +187,18 @@ int pcf8563_init(struct pcf8563 *dev)
         return rc;
     }
 
-    gpio_init_callback(&dev->gpio_cb, pcf8563_isr, BIT(dev->int_gpio.pin));
+    gpio_init_callback(&dev->gpio_cb, mcp7940n_isr, BIT(dev->int_gpio.pin));
     gpio_add_callback(dev->int_gpio.port, &dev->gpio_cb);
 
-    k_work_init(&dev->work, pcf8563_work_handler);
+    k_work_init(&dev->work, mcp7940n_work_handler);
 
-    LOG_INF("MCP7940N (pcf8563 API) init ok (INT on %s.%u)",
+    LOG_INF("MCP7940N (mcp7940n API) init ok (INT on %s.%u)",
             dev->int_gpio.port->name, dev->int_gpio.pin);
     return 0;
 }
 
-void pcf8563_set_alarm_callback(struct pcf8563 *dev,
-                                void (*cb)(void *user), void *user)
+void mcp7940n_set_alarm_callback(struct mcp7940n *dev,
+                                 void (*cb)(void *user), void *user)
 {
     dev->alarm_cb = cb;
     dev->alarm_user = user;
@@ -207,7 +207,7 @@ void pcf8563_set_alarm_callback(struct pcf8563 *dev,
 /* --- Timekeeping --- */
 /* Note: still assume 2000..2099, same as your old driver. */
 
-int pcf8563_get_time(struct pcf8563 *dev, struct tm *t)
+int mcp7940n_get_time(struct mcp7940n *dev, struct tm *t)
 {
     uint8_t b[7];
     int rc = rd(dev, REG_RTCSEC, b, sizeof(b));
@@ -243,7 +243,7 @@ int pcf8563_get_time(struct pcf8563 *dev, struct tm *t)
     return 0;
 }
 
-int pcf8563_set_time(struct pcf8563 *dev, const struct tm *t)
+int mcp7940n_set_time(struct mcp7940n *dev, const struct tm *t)
 {
     uint8_t b[7];
 
@@ -270,7 +270,7 @@ int pcf8563_set_time(struct pcf8563 *dev, const struct tm *t)
     return wr(dev, REG_RTCSEC, b, sizeof(b));
 }
 
-int pcf8563_set_alarm_tm(struct pcf8563 *dev, const struct tm *t)
+int mcp7940n_set_alarm_tm(struct mcp7940n *dev, const struct tm *t)
 {
     if (!dev || !t)
     {
@@ -317,11 +317,11 @@ int pcf8563_set_alarm_tm(struct pcf8563 *dev, const struct tm *t)
     }
 
     /* Clear any pending flag and enable IRQ. */
-    rc = pcf8563_alarm_clear_flag(dev);
+    rc = mcp7940n_alarm_clear_flag(dev);
     if (rc)
     {
         return rc;
     }
 
-    return pcf8563_alarm_irq_enable(dev, true);
+    return mcp7940n_alarm_irq_enable(dev, true);
 }

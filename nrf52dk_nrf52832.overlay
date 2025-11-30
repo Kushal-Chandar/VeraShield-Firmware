@@ -99,8 +99,8 @@
 };
 
 &i2c0 {
-    pcf8563: rtc@6f {
-        compatible = "pcf8563";
+    mcp7940n: rtc@6f {
+        compatible = "mcp7940n";
         reg = <0x6f>;
         status = "okay";
         int-gpios = <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;

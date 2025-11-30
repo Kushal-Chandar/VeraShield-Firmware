@@ -9,7 +9,7 @@
 #include "slider.h"
 #include "led_ctrl.h"
 #include "stats.h"
-#include "pcf8563.h"
+#include "mcp7940n.h"
 #include "tm_helpers.h"
 
 LOG_MODULE_REGISTER(SPRAY, LOG_LEVEL_INF);
@@ -68,9 +68,9 @@ static void start_cycle_work_handler(struct k_work *work)
             cfg_used.spray_ms, cfg_used.idle_ms, cfg_used.repeats, chosen_state);
 
     {
-        struct pcf8563 *rtc = pcf8563_get();
+        struct mcp7940n *rtc = mcp7940n_get();
         struct tm now = {0};
-        int rc = pcf8563_get_time(rtc, &now);
+        int rc = mcp7940n_get_time(rtc, &now);
         if (rc)
         {
             LOG_WRN("RTC read failed: %d (skipping stats append)", rc);

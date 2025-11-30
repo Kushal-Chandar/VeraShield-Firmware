@@ -19,7 +19,7 @@
 #include "tm_helpers.h"
 #include "ble.h"
 #include "spray.h"
-#include "pcf8563.h"
+#include "mcp7940n.h"
 #include "schedule_queue.h"
 #include "schedule.h"
 
@@ -369,17 +369,17 @@ static ssize_t gadi_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     else if (rc)
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
 
-    struct pcf8563 *rtc = pcf8563_get();
+    struct mcp7940n *rtc = mcp7940n_get();
     if (!rtc)
     {
-        LOG_ERR("pcf8563_get() returned NULL; not bound yet");
+        LOG_ERR("mcp7940n_get() returned NULL; not bound yet");
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
 
-    rc = pcf8563_set_time(rtc, &t);
+    rc = mcp7940n_set_time(rtc, &t);
     if (rc)
     {
-        LOG_ERR("pcf8563_set_time failed: %d", rc);
+        LOG_ERR("mcp7940n_set_time failed: %d", rc);
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
 

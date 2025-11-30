@@ -10,7 +10,7 @@
 #include "vbat.h"
 #include "spray.h"
 #include "slider.h"
-#include "pcf8563.h"
+#include "mcp7940n.h"
 #include "tm_helpers.h"
 #include "stats.h"
 #include "schedule_queue.h"
@@ -20,17 +20,17 @@
 
 LOG_MODULE_REGISTER(MAIN, LOG_LEVEL_INF);
 
-#define PCF8563_NODE DT_NODELABEL(pcf8563)
+#define MCP7940N_NODE DT_NODELABEL(mcp7940n)
 
-static struct pcf8563 rtc = {
-    .i2c = I2C_DT_SPEC_GET(PCF8563_NODE),
-    .int_gpio = GPIO_DT_SPEC_GET(PCF8563_NODE, int_gpios),
+static struct mcp7940n rtc = {
+    .i2c = I2C_DT_SPEC_GET(MCP7940N_NODE),
+    .int_gpio = GPIO_DT_SPEC_GET(MCP7940N_NODE, int_gpios),
 };
 
 static void seed_time_from_build_if_needed(void)
 {
     struct tm now;
-    if (pcf8563_get_time(&rtc, &now) == 0 && tm_sane(&now))
+    if (mcp7940n_get_time(&rtc, &now) == 0 && tm_sane(&now))
         return;
 
     static const char *mons = "JanFebMarAprMayJunJulAugSepOctNovDec";
@@ -45,7 +45,7 @@ static void seed_time_from_build_if_needed(void)
 
     struct tm t = {
         .tm_sec = S, .tm_min = M, .tm_hour = H, .tm_mday = d, .tm_mon = mon, .tm_year = y - 1900, .tm_isdst = -1};
-    if (pcf8563_set_time(&rtc, &t) == 0)
+    if (mcp7940n_set_time(&rtc, &t) == 0)
     {
         LOG_INF("RTC seeded: %04d-%02d-%02d %02d:%02d:%02d",
                 t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
@@ -170,9 +170,9 @@ int main(void)
 
     LOG_INF("BOOT");
 
-    pcf8563_init(&rtc);
-    pcf8563_bind(&rtc);
-    pcf8563_set_alarm_callback(&rtc, rtc_alarm_cb, NULL);
+    mcp7940n_init(&rtc);
+    mcp7940n_bind(&rtc);
+    mcp7940n_set_alarm_callback(&rtc, rtc_alarm_cb, NULL);
     at24c32_init();
     stats_init_if_blank();
     sched_init_if_blank();
@@ -216,7 +216,7 @@ int main(void)
             k_sleep(K_MSEC(5000));
             char tsbuf[100];
             struct tm t;
-            pcf8563_get_time(&rtc, &t);
+            mcp7940n_get_time(&rtc, &t);
             LOG_INF("RTC: %s", tm_to_str(&t, tsbuf, sizeof(tsbuf)));
         }
         else if (is_advertising)

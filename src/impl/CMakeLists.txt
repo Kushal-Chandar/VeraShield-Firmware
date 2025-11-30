@@ -2,7 +2,7 @@ target_sources(app PRIVATE
   main.c
   led_ctrl.c
   at24c32.c
-  pcf8563.c
+  mcp7940n.c
   tm_helpers.c
   ble.c
   servo.c

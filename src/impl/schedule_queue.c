@@ -3,7 +3,7 @@
 #include "schedule.h"
 #include "at24c32.h"
 #include "tm_helpers.h"
-#include "pcf8563.h"
+#include "mcp7940n.h"
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(schedule_queue, LOG_LEVEL_INF);
@@ -283,23 +283,23 @@ int schedule_queue_rebuild_from_sched(void)
     return n;
 }
 
-static inline struct pcf8563 *rtc(void) { return pcf8563_get(); }
+static inline struct mcp7940n *rtc(void) { return mcp7940n_get(); }
 
 static int rtc_now(struct tm *out)
 {
-    struct pcf8563 *r = rtc();
-    return (r && out) ? pcf8563_get_time(r, out) : -1;
+    struct mcp7940n *r = rtc();
+    return (r && out) ? mcp7940n_get_time(r, out) : -1;
 }
 
 static int rtc_alarm_arm_hm(const struct tm *t)
 {
-    struct pcf8563 *r = rtc();
+    struct mcp7940n *r = rtc();
     if (!r || !t)
     {
         return -1;
     }
 
-    return pcf8563_set_alarm_tm(r, t);
+    return mcp7940n_set_alarm_tm(r, t);
 }
 
 static int rebuild_and_fetch_sane_head(struct tm *head)
@@ -422,11 +422,11 @@ int schedule_queue_sync_and_arm_next(void)
 
 int schedule_queue_on_alarm(void (*do_action)(uint8_t intensity, const struct tm *when))
 {
-    struct pcf8563 *r = rtc();
+    struct mcp7940n *r = rtc();
     if (r)
     {
-        (void)pcf8563_alarm_irq_enable(r, false);
-        (void)pcf8563_alarm_clear_flag(r);
+        (void)mcp7940n_alarm_irq_enable(r, false);
+        (void)mcp7940n_alarm_clear_flag(r);
     }
 
     uint8_t t7[7], inten = 0;

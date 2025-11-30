@@ -1,0 +1,11 @@
+description: MCP7940N Real-Time Clock
+compatible: "mcp7940n"
+
+include:
+  - i2c-device.yaml
+
+properties:
+  int-gpios:
+    type: phandle-array
+    required: false
+    description: Interrupt GPIO from MCP7940N INT (active-low, open-drain)
