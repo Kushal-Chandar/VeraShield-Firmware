@@ -37,10 +37,11 @@ C firmware using nRF Connect SDK, with hardware drivers, ADC-based sensing, sche
 </table>
 
 Short demo clips:
-- `demo_spray_cycle.mp4` – on-device spray cycle
+  
 
-- `demo_remote_spray.mp4` – remote spray via app  
+https://github.com/user-attachments/assets/becf35ab-b74b-4b60-8dcc-868941870102
 
+https://github.com/user-attachments/assets/b98b5b6c-cf41-4e73-ad2d-16e138836947
 
 ## What this firmware does
 
